@@ -49,7 +49,7 @@ jobs:
 
       - name: Install Poetry
         run: |
-          curl -sSL "https://install.python-poetry.org" | python
+          curl -sSL "https://install.python-poetry.org" | python - --version 1.8.5
           echo "$HOME/.poetry/bin" >> $GITHUB_PATH
 
       - name: Install dependencies
