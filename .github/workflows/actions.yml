@@ -25,6 +25,8 @@ jobs:
         os: [ubuntu-latest]
         python-version: ["3.8", "3.9", "3.10", "3.11", "3.12"]
 
+    environment: ratelimit-io-gist-update
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
