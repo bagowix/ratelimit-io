@@ -45,12 +45,14 @@ jobs:
 
       - name: Install Poetry
         run: |
-          curl -sSL https://install.python-poetry.org | python3 -
-          export PATH="$HOME/.local/bin:$PATH"
+          curl -sSL "https://install.python-poetry.org" | python
+          echo "$HOME/.poetry/bin" >> $GITHUB_PATH
           poetry --version
 
       - name: Install dependencies
         run: |
+          poetry config virtualenvs.in-project true
+          poetry run pip install -U pip
           poetry install
 
       - name: Run tests and generate coverage
