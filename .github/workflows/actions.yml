@@ -24,15 +24,22 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
         python-version: ["3.8", "3.9", "3.10", "3.11", "3.12"]
-    services:
-      redis:
-        image: redis:alpine
-        ports:
-          - 6379:6379
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+
+      - name: Install Docker Compose
+        run: |
+          sudo curl -L "https://github.com/docker/compose/releases/download/v2.17.3/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+          sudo chmod +x /usr/local/bin/docker-compose
+
+      - name: Start services with Docker Compose
+        run: |
+          docker-compose up -d
+        env:
+          REDIS_HOST: localhost
+          REDIS_PORT: 6379
 
       - name: Set up Python
         uses: actions/setup-python@v5
