@@ -3,7 +3,7 @@ name: Tests, Lint & Update Gist
 on:
   push:
     branches:
-      - master
+      - main
     paths-ignore:
       - '.github/**'
       - 'integration_tests/**'
