@@ -29,10 +29,11 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Pull and build docker-compose services
+      - name: Install Docker Compose
         run: |
-          docker compose pull
-          docker compose up --detach
+          sudo curl -L "https://github.com/docker/compose/releases/download/v2.17.3/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+          sudo chmod +x /usr/local/bin/docker-compose
+          docker-compose --version
 
       - name: Start services with Docker Compose
         run: |
