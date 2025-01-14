@@ -4,7 +4,7 @@ A Python library for rate limiting, supporting both synchronous and asynchronous
 
 #### Project Information
 [![Tests & Lint](https://github.com/bagowix/ratelimit-io/actions/workflows/actions.yml/badge.svg)](https://github.com/bagowix/ratelimit-io/actions/workflows/actions.yml)
-[![Coverage](https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/bagowix/1ecff0cf19b2940c0053e79d41963602/raw/98e31937c460d2d16748cb11adc7ce80d77d9a94/ratelimit-io-coverage.json&style=flat)](https://gist.githubusercontent.com/bagowix/1ecff0cf19b2940c0053e79d41963602/raw/98e31937c460d2d16748cb11adc7ce80d77d9a94/ratelimit-io-coverage.json)
+[![Test Coverage](https://img.shields.io/badge/dynamic/json?color=blueviolet&label=coverage&query=%24.totals.percent_covered_display&suffix=%25&url=https%3A%2F%2Fraw.githubusercontent.com%2bagowix%2Fratelimit-io%2Fmain%2Fcoverage.json)](https://github.com/bagowix/ratelimit-io/blob/main/coverage.json)
 [![PyPI - Python Version](https://img.shields.io/pypi/pyversions/ratelimit-io)](https://pypi.org/project/ratelimit-io/)
 [![License](https://img.shields.io/pypi/l/ratelimitio)](LICENSE)
 
