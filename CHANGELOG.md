@@ -4,6 +4,12 @@ We follow [Semantic Versions](https://semver.org/).
 
 ## WIP
 
+## Version 0.2.4
+
+### Features
+
+- Edits README.md
+
 ## Version 0.2.3
 
 ### Features

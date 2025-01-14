@@ -44,13 +44,15 @@ from redis import Redis
 redis_client = Redis(host="localhost", port=6379)
 limiter = RatelimitIO(backend=redis_client)
 
-@limiter(LimitSpec(requests=10, seconds=60), unique_key="user:123")
+@limiter(LimitSpec(requests=10, seconds=60), unique_key="user:123")  # unique_key is optional
 def fetch_data():
     return "Request succeeded!"
 
 # Use the decorated function
 fetch_data()
 ```
+
+**Note**: The `unique_key` parameter is `optional`. If not provided, the `IP address` (or another default identifier, based on your application logic) will be used to apply rate limiting.
 
 ### Using as a Asynchronous Decorator
 
@@ -61,13 +63,15 @@ from redis.asyncio import Redis as AsyncRedis
 async_redis_client = AsyncRedis(host="localhost", port=6379)
 async_limiter = RatelimitIO(backend=async_redis_client)
 
-@async_limiter(LimitSpec(requests=10, seconds=60), unique_key="user:123")
+@async_limiter(LimitSpec(requests=10, seconds=60), unique_key="user:123")  # unique_key is optional
 async def fetch_data():
     return "Request succeeded!"
 
 # Use the decorated function
 await fetch_data()
 ```
+
+**Note**: Similar to the synchronous decorator, the `unique_key` is `optional`. If omitted, the `IP address` (or a default identifier) will be used.
 
 ### Using as a Synchronous Context Manager
 
