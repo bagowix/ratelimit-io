@@ -6,9 +6,3 @@ services:
     ports:
       - "6379:6379"
     command: ["redis-server", "--bind", "0.0.0.0"]
-  app:
-    build:
-      context: .
-    container_name: app
-    depends_on:
-      - redis
