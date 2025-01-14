@@ -2,6 +2,8 @@ name: Tests, Lint & Update Gist
 
 on:
   push:
+    branches:
+      - master
     paths-ignore:
       - '.github/**'
       - 'integration_tests/**'
