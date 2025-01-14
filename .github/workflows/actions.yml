@@ -5,20 +5,14 @@ on:
     branches:
       - main
     paths-ignore:
-      - '.github/**'
       - 'integration_tests/**'
       - 'tutorials/**'
-      - 'README.md'
-      - 'LICENSE'
       - '.gitignore'
       - 'media/**'
   pull_request:
     paths-ignore:
-      - '.github/**'
       - 'integration_tests/**'
       - 'tutorials/**'
-      - 'README.md'
-      - 'LICENSE'
       - '.gitignore'
       - 'media/**'
 
@@ -47,9 +41,8 @@ jobs:
 
       - name: Install Poetry
         run: |
-          curl -sSL "https://install.python-poetry.org" | python
-          echo "$HOME/.poetry/bin" >> $GITHUB_PATH
-          poetry --version
+          curl -sSL https://install.python-poetry.org | python3 -
+          export PATH="$HOME/.local/bin:$PATH"
 
       - name: Install dependencies
         run: |
