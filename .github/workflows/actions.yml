@@ -29,11 +29,10 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Install Docker Compose
+      - name: Pull and build docker-compose services
         run: |
-          sudo curl -L "https://github.com/docker/compose/releases/download/v2.17.3/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
-          sudo chmod +x /usr/local/bin/docker-compose
-          docker-compose --version
+          docker compose pull
+          docker compose up --detach
 
       - name: Start services with Docker Compose
         run: |
@@ -49,8 +48,8 @@ jobs:
 
       - name: Install Poetry
         run: |
-          curl -sSL https://install.python-poetry.org | python3 -
-          export PATH="$HOME/.local/bin:$PATH"
+          curl -sSL "https://install.python-poetry.org" | python
+          echo "$HOME/.poetry/bin" >> $GITHUB_PATH
 
       - name: Install dependencies
         run: |
