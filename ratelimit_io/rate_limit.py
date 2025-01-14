@@ -345,7 +345,7 @@ class RatelimitIO:
             bool: True if the request is allowed, False otherwise.
         """
         try:
-            allowed = await self.backend.evalsha(
+            allowed = await self.backend.evalsha(  # type: ignore
                 self._lua_script_hash,
                 1,
                 self._generate_key(key),
@@ -357,7 +357,7 @@ class RatelimitIO:
             # Attempt to load the script and retry once
             await self._ensure_script_loaded_async()
             try:
-                allowed = await self.backend.evalsha(
+                allowed = await self.backend.evalsha(  # type: ignore
                     self._lua_script_hash,
                     1,
                     self._generate_key(key),
@@ -385,7 +385,9 @@ class RatelimitIO:
 
     def _ensure_script_loaded_sync(self) -> None:
         """Ensures the Lua script is loaded into Redis (synchronously)."""
-        if not self.backend.script_exists(self._lua_script_hash)[0]:
+        if not self.backend.script_exists(  # type: ignore
+            self._lua_script_hash
+        )[0]:
             self.backend.script_load(self._lua_script)
         self._script_loaded = True
 
