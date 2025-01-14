@@ -1,0 +1,50 @@
+exclude: ^coverage
+repos:
+    - repo: https://github.com/pre-commit/pre-commit-hooks
+      rev: v5.0.0
+      hooks:
+        - id: check-ast
+        - id: check-builtin-literals
+        - id: check-case-conflict
+        - id: check-docstring-first
+        - id: check-executables-have-shebangs
+        - id: check-json
+        - id: check-merge-conflict
+        - id: check-shebang-scripts-are-executable
+        - id: check-symlinks
+        - id: check-toml
+        - id: check-yaml
+        - id: check-xml
+        - id: debug-statements
+        - id: destroyed-symlinks
+        - id: fix-byte-order-marker
+        - id: mixed-line-ending
+        - id: trailing-whitespace
+        - id: end-of-file-fixer
+        - id: check-vcs-permalinks
+        - id: name-tests-test
+          args: [ --pytest-test-first ]
+        - id: pretty-format-json
+          args: [ --no-sort-keys ]
+
+    - repo: https://github.com/python-poetry/poetry
+      rev: 1.8.5
+      hooks:
+        - id: poetry-check
+          name: poetry-check[sl-marketplace-gateway]
+          args: [ -C, app ]
+
+    - repo: https://github.com/astral-sh/ruff-pre-commit
+      rev: v0.9.1
+      hooks:
+        - id: ruff
+          args: [ --fix, --exit-non-zero-on-fix ]
+        - id: ruff-format
+
+    - repo: https://github.com/pre-commit/mirrors-mypy
+      rev: v1.14.1
+      hooks:
+        - id: mypy
+          additional_dependencies:
+            - "mypy-extensions>=1.0.0"
+            - "types-redis>=4.6.0.20241004"

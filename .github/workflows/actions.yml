@@ -1,0 +1,118 @@
+name: Tests, Lint & Update Gist
+
+on:
+  push:
+    paths-ignore:
+      - '.github/**'
+      - 'integration_tests/**'
+      - 'tutorials/**'
+      - 'README.md'
+      - 'LICENSE'
+      - '.gitignore'
+      - 'media/**'
+  pull_request:
+    paths-ignore:
+      - '.github/**'
+      - 'integration_tests/**'
+      - 'tutorials/**'
+      - 'README.md'
+      - 'LICENSE'
+      - '.gitignore'
+      - 'media/**'
+
+jobs:
+  tests:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python-version: ["3.8", "3.9", "3.10", "3.11", "3.12"]
+    services:
+      redis:
+        image: redis:alpine
+        ports:
+          - 6379:6379
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install Poetry
+        run: |
+          curl -sSL https://install.python-poetry.org | python3 -
+          export PATH="$HOME/.local/bin:$PATH"
+          poetry --version
+
+      - name: Install dependencies
+        run: |
+          poetry install
+
+      - name: Run tests and generate coverage
+        env:
+          REDIS_HOST: localhost
+          REDIS_PORT: 6379
+        run: |
+          poetry run pytest --cov --cov-report=json:coverage.json
+
+      - name: Upload coverage.json as artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: coverage-report
+          path: coverage.json
+
+  lint:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: 3.11
+
+      - name: Install Poetry
+        run: |
+          curl -sSL https://install.python-poetry.org | python3 -
+          export PATH="$HOME/.local/bin:$PATH"
+
+      - name: Install Ruff
+        run: |
+          poetry run pip install ruff
+
+      - name: Run Ruff
+        run: |
+          poetry run ruff check .
+
+  update-gist:
+    needs: tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download coverage.json
+        uses: actions/download-artifact@v3
+        with:
+          name: coverage-report
+
+      - name: Prepare Gist Data
+        run: |
+          jq -n --arg content "$(cat coverage.json)" '{"files": {"coverage.json": {"content": $content}}}' > gist_payload.json
+
+      - name: Update Gist
+        env:
+          GIST_TOKEN: ${{ secrets.GIST_TOKEN }}
+        run: |
+          curl -X PATCH \
+            -H "Authorization: token $GIST_TOKEN" \
+            -H "Content-Type: application/json" \
+            --data-binary @gist_payload.json \
+            https://api.github.com/gists/1ecff0cf19b2940c0053e79d41963602
