@@ -1,6 +1,6 @@
 # RatelimitIO
 
-A Python library for rate limiting, supporting both synchronous and asynchronous paradigms. Built on Redis, this library provides decorators, context managers, and easy integration with APIs to manage incoming and outgoing request limits effectively.
+A Python library for rate limiting, built to handle both incoming and outgoing requests efficiently. Supports both synchronous and asynchronous paradigms. Powered by Redis, this library provides decorators, context managers, and easy integration with APIs to manage request limits with precision.
 
 #### Project Information
 [![Tests & Lint](https://github.com/bagowix/ratelimit-io/actions/workflows/actions.yml/badge.svg)](https://github.com/bagowix/ratelimit-io/actions/workflows/actions.yml)
@@ -12,14 +12,16 @@ A Python library for rate limiting, supporting both synchronous and asynchronous
 
 ## Features
 
+- **Incoming and Outgoing Support**: Effectively handles limits for both inbound
 - **Synchronous and Asynchronous Support**: Works seamlessly in both paradigms.
 - **Redis Backend**: Leverages Redis for fast and scalable rate limiting.
 - **Flexible API**:
   - Use as a **decorator** for methods or functions.
-  - Use as a **context manager**.
-  - Integrate directly into API clients or middlewares.
+  - Use as a **context manager** for precise control over request flows.
+  - Integrate directly into API clients, middlewares, or custom request handlers.
 - **Customizable Rate Limits**: Specify limits per key, time period, and requests.
-- **Robust Lua Script**: Efficient and atomic rate limiting logic.
+- **Robust Lua Script**: Ensures efficient and atomic rate limiting logic for high-concurrency use cases.
+- **Ease of Use**: Simple and intuitive integration into Python applications.
 
 ---
 

@@ -1,7 +1,7 @@
 [tool.poetry]
 name = "ratelimit-io"
-version = "0.2.2"
-description = "Flexible bidirectional rate limiting library with redis backend"
+version = "0.2.3"
+description = "Flexible bidirectional rate-limiting library with redis backend"
 authors = ["Galushko Bogdan <galushko355@gmail.com>"]
 license = "MIT"
 readme = "README.md"
@@ -12,11 +12,27 @@ package-mode = true
 repository = "https://github.com/bagowix/ratelimit-io"
 
 keywords = [
-    "asyncio",
+    "rate-limit",
+    "ratelimit",
+    "rate limit",
+    "throttle",
+    "rate control",
     "rate-limiting",
+    "ratelimiting",
+    "limit",
+    "limiting",
+    "asyncio",
     "I/O",
     "redis",
     "aioredis",
+]
+
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Topic :: Software Development :: Libraries",
+    "Topic :: Internet",
+    "Topic :: System :: Networking",
+    "Intended Audience :: Developers",
 ]
 
 [tool.poetry.dependencies]
