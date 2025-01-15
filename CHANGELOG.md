@@ -4,6 +4,19 @@ We follow [Semantic Versions](https://semver.org/).
 
 ## WIP
 
+## Version 0.3.1
+
+### Fixes
+
+- Removed `TypeAlias` import from `typing_extensions` for better compatibility with Python 3.8 and 3.9, as `TypeAlias` is now part of `typing` in Python 3.10+.
+- Replaced the `RedisBackend` alias with a direct use of `Union[Redis, AsyncRedis]` in the `backend` parameter of the `__init__` method for backward compatibility.
+
+### Misc
+
+- Updated README with improved examples for:
+  - **Using middleware for FastAPI**: Enhanced to include proper error handling with `JSONResponse` for 429 responses, providing more clarity and correctness.
+  - **Using middleware for Django**: Added a class-based middleware example leveraging `MiddlewareMixin` for better integration with Django's request/response lifecycle. Also demonstrated an example with DRF's `APIView`.
+
 ## Version 0.3.0
 
 ### Features

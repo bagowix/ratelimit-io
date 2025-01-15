@@ -10,7 +10,6 @@ import hashlib
 from redis import Redis
 from redis.asyncio import Redis as AsyncRedis
 from redis.exceptions import NoScriptError
-from typing_extensions import TypeAlias
 
 
 class RatelimitIOError(Exception):
@@ -78,15 +77,12 @@ class LimitSpec:
         return f"{self.requests}/{self.total_seconds()}s"
 
 
-RedisBackend: TypeAlias = Union[Redis, AsyncRedis]
-
-
 class RatelimitIO:
     """Rate limiter for managing incoming and outgoing request limits."""
 
     def __init__(
         self,
-        backend: RedisBackend,
+        backend: Union[Redis, AsyncRedis],
         is_incoming: bool = False,
         base_url: Optional[str] = None,
         base_limit: Optional[LimitSpec] = None,

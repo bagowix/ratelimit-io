@@ -125,22 +125,31 @@ async with async_limiter:
 
 ```python
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse
 from ratelimit_io import RatelimitIO, RatelimitIOError, LimitSpec
 from redis.asyncio import Redis as AsyncRedis
 
 app = FastAPI()
 redis_client = AsyncRedis(host="localhost", port=6379)
-limiter = RatelimitIO(backend=redis_client, is_incoming=True)
+limiter = RatelimitIO(
+    backend=redis_client,
+    base_limit=LimitSpec(requests=5, seconds=1),
+    is_incoming=True
+)
 
 @app.middleware("http")
 async def ratelimit_middleware(request: Request, call_next):
     try:
-        await limiter.a_wait(f"user:{request.client.host}", LimitSpec(10, seconds=60))
-    except RatelimitIOError as e:
-        raise HTTPException(status_code=e.status_code, detail=e.detail)
-    return await call_next(request)
+        response = await call_next(request)
+        return response
+    except RatelimitIOError as exc:
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={"detail": exc.detail}
+        )
 
 @app.get("/fetch")
+@limit
 async def fetch_data():
     return {"message": "Request succeeded!"}
 ```
@@ -149,20 +158,39 @@ async def fetch_data():
 
 ```python
 from django.http import JsonResponse
-from ratelimit_io import RatelimitIO, RatelimitIOError, LimitSpec
+from django.utils.deprecation import MiddlewareMixin
+from ratelimit_io import RatelimitIO, LimitSpec, RatelimitIOError
 from redis import Redis
+from rest_framework import status
+from rest_framework.response import Response
+from rest_framework.views import APIView
 
-redis_client = Redis(host="localhost", port=6379)
-limiter = RatelimitIO(backend=redis_client, is_incoming=True)
 
-def ratelimit_middleware(get_response):
-    def middleware(request):
-        try:
-            limiter.wait(f"user:{request.META['REMOTE_ADDR']}", LimitSpec(10, seconds=60))
-        except RatelimitIOError as e:
-            return JsonResponse({"error": e.detail}, status=e.status_code)
-        return get_response(request)
-    return middleware
+redis = Redis("localhost", port=6379)
+limit = RatelimitIO(
+    backend=redis,
+    base_limit=LimitSpec(requests=5, seconds=1),
+    is_incoming=True,
+)
+
+
+class RatelimitMiddleware(MiddlewareMixin):
+    def process_exception(self, request, exception):
+        if isinstance(exception, RatelimitIOError):
+            return JsonResponse(
+                {"detail": exception.detail},
+                status=exception.status_code,
+            )
+        return None
+
+
+class Foo(APIView):
+    permission_classes = ()
+
+    @limit
+    def get(self, request, *args, **kwargs):
+        return Response(data={"message": "ok"}, status=status.HTTP_200_OK)
+
 ```
 
 ### Flask Example
