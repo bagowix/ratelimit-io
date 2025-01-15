@@ -1,6 +1,8 @@
 import os
 import re
 import time
+from typing import AsyncGenerator
+from typing import Generator
 
 import pytest
 import redis
@@ -9,10 +11,11 @@ from redis.asyncio import Redis as AsyncRedis
 
 from ratelimit_io import LimitSpec
 from ratelimit_io import RatelimitIO
+from ratelimit_io import RatelimitIOError
 
 
 @pytest.fixture(scope="function")
-def real_redis_client():
+def real_redis_client() -> Generator[Redis, None, None]:
     """
     Real Redis client for synchronous tests.
 
@@ -33,7 +36,7 @@ def real_redis_client():
 
 
 @pytest.fixture(scope="function")
-async def real_async_redis_client():
+async def real_async_redis_client() -> AsyncGenerator[AsyncRedis, None]:
     """
     Real Redis client for asynchronous tests.
 
@@ -50,11 +53,11 @@ async def real_async_redis_client():
     client = AsyncRedis(host=host, port=port, decode_responses=True)
     await client.flushall()
     yield client
-    await client.aclose()
+    await client.aclose()  # type: ignore
 
 
 @pytest.fixture
-def limiter(real_redis_client):
+def limiter(real_redis_client) -> RatelimitIO:
     """Fixture for RatelimitIO instance with real Redis."""
     return RatelimitIO(
         backend=real_redis_client,
@@ -64,7 +67,7 @@ def limiter(real_redis_client):
 
 
 @pytest.fixture
-async def async_limiter(real_async_redis_client):
+async def async_limiter(real_async_redis_client) -> RatelimitIO:
     """Fixture for RatelimitIO instance with real Redis (async)."""
     return RatelimitIO(
         backend=real_async_redis_client,
@@ -73,54 +76,38 @@ async def async_limiter(real_async_redis_client):
     )
 
 
-def test_sync_limit(limiter):
-    """Test synchronous rate limiting."""
-    key = "sync_test"
+def test_sync_limit_incoming(limiter):
+    """Test synchronous rate limiting with is_incoming=True."""
+    limiter.is_incoming = True
+    key = "sync_incoming_test"
 
     for _ in range(5):
         limiter.wait(key, LimitSpec(requests=5, seconds=1))
 
-    start_time = time.time()
-
-    limiter.wait(key, LimitSpec(requests=5, seconds=1))
-
-    elapsed_time = time.time() - start_time
-
-    assert elapsed_time >= 0.9, "Wait time did not occur as expected"
+    with pytest.raises(RatelimitIOError, match="Too many Requests"):
+        limiter.wait(key, LimitSpec(requests=5, seconds=1))
 
 
 @pytest.mark.asyncio
-async def test_async_limit(async_limiter):
-    """Test asynchronous rate limiting."""
-    key = "async_test"
-
-    await async_limiter.backend.flushall()
+async def test_async_limit_incoming(async_limiter):
+    """Test asynchronous rate limiting with is_incoming=True."""
+    async_limiter.is_incoming = True
+    key = "async_incoming_test"
 
     for _ in range(5):
-        await async_limiter.a_wait(key, LimitSpec(requests=5, seconds=5))
-        await async_limiter.backend.get(async_limiter._generate_key(key))
+        await async_limiter.a_wait(key, LimitSpec(requests=5, seconds=1))
 
-    start_time = time.time()
-    await async_limiter.a_wait(key, LimitSpec(requests=5, seconds=5))
-    elapsed_time = time.time() - start_time
-    assert elapsed_time >= 0.9, "Wait time did not occur as expected"
-
-    remaining = await async_limiter.backend.get(
-        async_limiter._generate_key(key)
-    )
-    ttl = await async_limiter.backend.ttl(async_limiter._generate_key(key))
-
-    assert remaining is not None, "Key should exist in Redis"
-    assert int(remaining) <= 5, f"Unexpected requests count: {remaining}"
-    assert ttl > 0, f"Unexpected TTL: {ttl}"
+    with pytest.raises(RatelimitIOError, match="Too many Requests"):
+        await async_limiter.a_wait(key, LimitSpec(requests=5, seconds=1))
 
 
 @pytest.mark.asyncio
-async def test_async_decorator(async_limiter):
-    """Test asynchronous decorator usage."""
+async def test_async_decorator_incoming(async_limiter):
+    """Test asynchronous decorator usage with is_incoming=True."""
+    async_limiter.is_incoming = True
 
     @async_limiter(
-        LimitSpec(requests=5, seconds=1), unique_key="async_decorator_test"
+        LimitSpec(requests=5, seconds=1), unique_key="async_test_key"
     )
     async def limited_function():
         return "success"
@@ -128,30 +115,128 @@ async def test_async_decorator(async_limiter):
     for _ in range(5):
         assert await limited_function() == "success"
 
-    start_time = time.time()
-    assert await limited_function() == "success"
-    elapsed_time = time.time() - start_time
-
-    assert elapsed_time >= 0.9, "Wait time did not occur as expected"
+    with pytest.raises(RatelimitIOError, match="Too many Requests"):
+        await limited_function()
 
 
-def test_sync_decorator(limiter):
-    """Test synchronous decorator usage."""
+def test_sync_decorator_incoming(limiter):
+    """Test synchronous decorator usage with is_incoming=True."""
+    limiter.is_incoming = True
 
-    @limiter(
-        LimitSpec(requests=5, seconds=1), unique_key="sync_decorator_test"
-    )
+    @limiter(LimitSpec(requests=5, seconds=1), unique_key="sync_test_key")
     def limited_function():
         return "success"
 
     for _ in range(5):
         assert limited_function() == "success"
 
+    with pytest.raises(RatelimitIOError, match="Too many Requests"):
+        limited_function()
+
+
+def test_sync_limit_outgoing(limiter):
+    """Test synchronous rate limiting with is_incoming=False."""
+    limiter.is_incoming = False
+    key = "sync_outgoing_test"
+
+    for _ in range(5):
+        limiter.wait(key, LimitSpec(requests=5, seconds=1))
+
     start_time = time.time()
-    assert limited_function() == "success"
+    limiter.wait(key, LimitSpec(requests=5, seconds=1))
     elapsed_time = time.time() - start_time
 
-    assert elapsed_time >= 0.9, "Wait time did not occur as expected"
+    assert elapsed_time >= 0.9, "Wait time not applied for outgoing request"
+
+
+@pytest.mark.asyncio
+async def test_async_limit_outgoing(async_limiter):
+    """Test asynchronous rate limiting with is_incoming=False."""
+    async_limiter.is_incoming = False
+    key = "async_outgoing_test"
+
+    for _ in range(5):
+        await async_limiter.a_wait(key, LimitSpec(requests=5, seconds=1))
+
+    start_time = time.time()
+    await async_limiter.a_wait(key, LimitSpec(requests=5, seconds=1))
+    elapsed_time = time.time() - start_time
+
+    assert elapsed_time >= 0.9, "Wait time not applied for outgoing request"
+
+
+def test_default_key_incoming_behavior(limiter):
+    """Test default_key behavior when is_incoming=True."""
+    limiter.is_incoming = True
+    limiter.default_key = "default_key_incoming"
+
+    @limiter
+    def limited_function():
+        return "success"
+
+    for _ in range(5):
+        assert limited_function() == "success"
+
+    with pytest.raises(RatelimitIOError, match="Too many Requests"):
+        limited_function()
+
+
+@pytest.mark.asyncio
+async def test_default_key_incoming_behavior_async(async_limiter):
+    """Test default_key behavior when is_incoming=True (async)."""
+    async_limiter.is_incoming = True
+    async_limiter.default_key = "default_async_key"
+
+    @async_limiter
+    async def limited_function():
+        return "success"
+
+    for _ in range(5):
+        assert await limited_function() == "success"
+
+    with pytest.raises(RatelimitIOError, match="Too many Requests"):
+        await limited_function()
+
+
+def test_sync_decorator_without_args(limiter):
+    """Test synchronous decorator without arguments."""
+
+    limiter.default_key = "default_test_key"
+
+    @limiter
+    def limited_function():
+        return "success"
+
+    for _ in range(5):
+        assert limited_function() == "success"
+
+    # Превышение лимита вызывает задержку
+    start_time = time.time()
+    limited_function()
+    elapsed_time = time.time() - start_time
+
+    assert elapsed_time >= 0.9, "Wait time not applied with default_key"
+
+
+@pytest.mark.asyncio
+async def test_async_decorator_without_args(async_limiter):
+    """Test asynchronous decorator without arguments."""
+
+    async_limiter.default_key = "default_async_key"
+
+    @async_limiter
+    async def limited_function():
+        return "success"
+
+    for _ in range(5):
+        assert await limited_function() == "success"
+
+    # Превышение лимита вызывает задержку
+    start_time = time.time()
+    await limited_function()
+    elapsed_time = time.time() - start_time
+
+    assert elapsed_time >= 0.9, "Wait time not applied with default_key"
 
 
 @pytest.mark.asyncio
@@ -439,3 +524,104 @@ def test_limitspec_no_time_frame():
     """Test LimitSpec raises an error when no time frame is provided."""
     with pytest.raises(ValueError, match="At least one time frame"):
         LimitSpec(requests=5, seconds=0, minutes=0, hours=0)
+
+
+def test_default_key_usage(limiter):
+    """Test the usage of default_key when unique_key is not provided."""
+    limiter.default_key = "default_test_key"
+
+    @limiter
+    def limited_function():
+        return "success"
+
+    # Ограничение должно работать с default_key
+    for _ in range(5):
+        assert limited_function() == "success"
+
+    # Превышение лимита вызывает задержку
+    start_time = time.time()
+    limited_function()
+    elapsed_time = time.time() - start_time
+
+    assert elapsed_time >= 0.9, "Wait time not applied with default_key"
+
+
+def test_override_default_key(limiter):
+    """Test overriding default_key with unique_key."""
+    limiter.default_key = "default_test_key"
+
+    @limiter(
+        limit_spec=LimitSpec(requests=3, seconds=2), unique_key="custom_key"
+    )
+    def limited_function():
+        return "success"
+
+    # Ограничение должно работать с unique_key
+    for _ in range(3):
+        assert limited_function() == "success"
+
+    # Превышение лимита вызывает задержку
+    start_time = time.time()
+    limited_function()
+    elapsed_time = time.time() - start_time
+
+    assert elapsed_time >= 1.9, "Wait time not applied with custom unique_key"
+
+
+def test_priority_unique_key_over_default_key(limiter):
+    """Test that unique_key takes precedence over default_key."""
+
+    limiter.default_key = "default_test_key"
+
+    @limiter(
+        limit_spec=LimitSpec(requests=5, seconds=1), unique_key="priority_key"
+    )
+    def limited_function():
+        return "success"
+
+    for _ in range(5):
+        assert limited_function() == "success"
+
+    start_time = time.time()
+    limited_function()
+    elapsed_time = time.time() - start_time
+
+    assert elapsed_time >= 0.9, "Wait time not applied with unique_key"
+
+
+def test_priority_default_key_over_ip(limiter):
+    """Test that default_key takes precedence over ip from kwargs."""
+
+    limiter.default_key = "default_test_key"
+
+    @limiter
+    def limited_function(ip="user_ip"):
+        return "success"
+
+    for _ in range(5):
+        assert limited_function() == "success"
+
+    start_time = time.time()
+    limited_function(ip="ignored_ip")
+    elapsed_time = time.time() - start_time
+
+    assert elapsed_time >= 0.9, "Wait time not applied with default_key"
+
+
+def test_ip_key_as_fallback(limiter):
+    """Test that ip from kwargs is used if no other keys are provided."""
+
+    limiter.default_key = None
+
+    @limiter
+    def limited_function(ip="user_ip"):
+        return "success"
+
+    for _ in range(5):
+        assert limited_function() == "success"
+
+    start_time = time.time()
+    limited_function()
+    elapsed_time = time.time() - start_time
+
+    assert elapsed_time >= 0.9, "Wait time not applied with ip key"

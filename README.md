@@ -1,6 +1,6 @@
 # RatelimitIO
 
-A Python library for rate limiting, built to handle both incoming and outgoing requests efficiently. Supports both synchronous and asynchronous paradigms. Powered by Redis, this library provides decorators, context managers, and easy integration with APIs to manage request limits with precision.
+A Python library for rate limiting, designed to handle both incoming and outgoing requests efficiently. Supports both synchronous and asynchronous paradigms. Powered by Redis, this library provides decorators, context managers, and easy integration with APIs to manage request limits with precision.
 
 #### Project Information
 [![Tests & Lint](https://github.com/bagowix/ratelimit-io/actions/workflows/actions.yml/badge.svg)](https://github.com/bagowix/ratelimit-io/actions/workflows/actions.yml)
@@ -13,7 +13,7 @@ A Python library for rate limiting, built to handle both incoming and outgoing r
 
 ## Features
 
-- **Incoming and Outgoing Support**: Effectively handles limits for both inbound
+- **Incoming and Outgoing Support**: Effectively handles limits for both inbound (e.g., API requests) and outbound (e.g., client requests to external APIs) traffic.
 - **Synchronous and Asynchronous Support**: Works seamlessly in both paradigms.
 - **Redis Backend**: Leverages Redis for fast and scalable rate limiting.
 - **Flexible API**:
@@ -22,6 +22,8 @@ A Python library for rate limiting, built to handle both incoming and outgoing r
   - Integrate directly into API clients, middlewares, or custom request handlers.
 - **Customizable Rate Limits**: Specify limits per key, time period, and requests.
 - **Robust Lua Script**: Ensures efficient and atomic rate limiting logic for high-concurrency use cases.
+- **Automatic Error Handling**: Easily manage 429 Too Many Requests errors in popular frameworks like Flask, Django, and FastAPI.
+- **Support for Incoming Request Behavior**: Use the `is_incoming` flag to distinguish between incoming requests (throwing errors immediately) and outgoing requests (waiting for available slots).
 - **Ease of Use**: Simple and intuitive integration into Python applications.
 
 ---
@@ -43,17 +45,15 @@ from ratelimit_io import RatelimitIO, LimitSpec
 from redis import Redis
 
 redis_client = Redis(host="localhost", port=6379)
-limiter = RatelimitIO(backend=redis_client)
+limiter = RatelimitIO(backend=redis_client, base_limit=LimitSpec(requests=10, seconds=60))
 
-@limiter(LimitSpec(requests=10, seconds=60), unique_key="user:123")  # unique_key is optional
+@limiter
 def fetch_data():
     return "Request succeeded!"
 
 # Use the decorated function
 fetch_data()
 ```
-
-**Note**: The `unique_key` parameter is `optional`. If not provided, the `IP address` (or another default identifier, based on your application logic) will be used to apply rate limiting.
 
 ### Using as a Asynchronous Decorator
 
@@ -62,9 +62,9 @@ from ratelimit_io import RatelimitIO, LimitSpec
 from redis.asyncio import Redis as AsyncRedis
 
 async_redis_client = AsyncRedis(host="localhost", port=6379)
-async_limiter = RatelimitIO(backend=async_redis_client)
+async_limiter = RatelimitIO(backend=async_redis_client, base_limit=LimitSpec(requests=10, seconds=60))
 
-@async_limiter(LimitSpec(requests=10, seconds=60), unique_key="user:123")  # unique_key is optional
+@async_limiter
 async def fetch_data():
     return "Request succeeded!"
 
@@ -72,11 +72,36 @@ async def fetch_data():
 await fetch_data()
 ```
 
-**Note**: Similar to the synchronous decorator, the `unique_key` is `optional`. If omitted, the `IP address` (or a default identifier) will be used.
+### Incoming vs. Outgoing Request Handling (`is_incoming`)
+
+- When `is_incoming=True`, the rate limiter will immediately raise a `RatelimitIOError` when limits are exceeded.
+- When `is_incoming=False` (default), the rate limiter will wait until a slot becomes available.
+
+```python
+# Incoming request example (throws an error on limit breach)
+limiter = RatelimitIO(backend=redis_client, is_incoming=True)
+
+@limiter(LimitSpec(requests=5, seconds=10))
+def fetch_data():
+    return "Request succeeded!"
+
+# Outgoing request example (waits if limits are exceeded)
+outgoing_limiter = RatelimitIO(backend=redis_client)
+
+@outgoing_limiter(LimitSpec(requests=5, seconds=10))
+def fetch_data_outgoing():
+    return "Request succeeded!"
+```
 
 ### Using as a Synchronous Context Manager
 
 ```python
+from ratelimit_io import RatelimitIO, LimitSpec
+from redis import Redis
+
+redis_client = Redis(host="localhost", port=6379)
+limiter = RatelimitIO(backend=redis_client)
+
 with limiter:
     limiter.wait("user:456", LimitSpec(requests=5, seconds=10))
 ```
@@ -84,8 +109,81 @@ with limiter:
 ### Using as a Asynchronous Context Manager
 
 ```python
-async with limiter:
-    await limiter.a_wait("user:456", LimitSpec(requests=5, seconds=10))
+from ratelimit_io import RatelimitIO, LimitSpec
+from redis.asyncio import Redis as AsyncRedis
+
+async_redis_client = AsyncRedis(host="localhost", port=6379)
+async_limiter = RatelimitIO(backend=async_redis_client)
+
+async with async_limiter:
+    await async_limiter.a_wait("user:456", LimitSpec(requests=5, seconds=10))
+```
+
+## Error Handling for 429 Responses
+
+### FastAPI Example
+
+```python
+from fastapi import FastAPI, HTTPException, Request
+from ratelimit_io import RatelimitIO, RatelimitIOError, LimitSpec
+from redis.asyncio import Redis as AsyncRedis
+
+app = FastAPI()
+redis_client = AsyncRedis(host="localhost", port=6379)
+limiter = RatelimitIO(backend=redis_client, is_incoming=True)
+
+@app.middleware("http")
+async def ratelimit_middleware(request: Request, call_next):
+    try:
+        await limiter.a_wait(f"user:{request.client.host}", LimitSpec(10, seconds=60))
+    except RatelimitIOError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.detail)
+    return await call_next(request)
+
+@app.get("/fetch")
+async def fetch_data():
+    return {"message": "Request succeeded!"}
+```
+
+### Django Middleware Example
+
+```python
+from django.http import JsonResponse
+from ratelimit_io import RatelimitIO, RatelimitIOError, LimitSpec
+from redis import Redis
+
+redis_client = Redis(host="localhost", port=6379)
+limiter = RatelimitIO(backend=redis_client, is_incoming=True)
+
+def ratelimit_middleware(get_response):
+    def middleware(request):
+        try:
+            limiter.wait(f"user:{request.META['REMOTE_ADDR']}", LimitSpec(10, seconds=60))
+        except RatelimitIOError as e:
+            return JsonResponse({"error": e.detail}, status=e.status_code)
+        return get_response(request)
+    return middleware
+```
+
+### Flask Example
+
+```python
+from flask import Flask, jsonify
+from ratelimit_io import RatelimitIO, RatelimitIOError, LimitSpec
+from redis import Redis
+
+app = Flask(__name__)
+redis_client = Redis(host="localhost", port=6379)
+limiter = RatelimitIO(backend=redis_client, is_incoming=True)
+
+@app.errorhandler(RatelimitIOError)
+def handle_ratelimit_error(error):
+    return jsonify({"error": error.detail}), error.status_code
+
+@app.route("/fetch")
+@limiter
+def fetch_data():
+    return jsonify({"message": "Request succeeded!"})
 ```
 
 ## License
