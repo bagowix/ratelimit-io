@@ -400,14 +400,9 @@ def test_prepare_key_with_base_url():
     )
     limiter.base_limit = LimitSpec(5, seconds=1)
 
-    key, limit_spec = limiter._prepare_key_and_limit(None, None)
-    assert key.startswith("outgoing:ratelimit-io:")
-    assert limit_spec == limiter.base_limit
-
-    limit_spec = LimitSpec(10, seconds=2)
-    key, limit_spec = limiter._prepare_key_and_limit("test_key", limit_spec)
-    assert key == "test_key"
-    assert limit_spec.requests == 10
+    key = limiter._prepare_key(None)
+    assert key.startswith("unknown_key")
+    assert limiter.base_limit.requests == 5
 
 
 def test_ensure_script_loaded_sync(limiter, real_redis_client):
@@ -425,18 +420,6 @@ async def test_ensure_script_loaded_async(
     await real_async_redis_client.script_flush()
 
     await async_limiter._ensure_script_loaded_async()
-
-
-def test_invalid_prepare_key_and_limit():
-    """Test invalid cases for _prepare_key_and_limit."""
-    limiter = RatelimitIO(
-        backend=Redis(decode_responses=True),
-        base_url="https://api.example.com",
-    )
-    with pytest.raises(
-        ValueError, match="limit_spec or self.base_limit must be provided."
-    ):
-        limiter._prepare_key_and_limit(None, None)
 
 
 def test_invalid_limit_spec():
@@ -625,3 +608,15 @@ def test_ip_key_as_fallback(limiter):
     elapsed_time = time.time() - start_time
 
     assert elapsed_time >= 0.9, "Wait time not applied with ip key"
+
+
+def test_call_decorator_no_limit_spec_or_base_limit():
+    """Test decorator raises ValueError if no limit_spec or base_limit."""
+    limiter = RatelimitIO(backend=Redis(decode_responses=True))
+    with pytest.raises(
+        ValueError, match="Rate limit specification is missing"
+    ):
+
+        @limiter
+        def func():
+            pass

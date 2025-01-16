@@ -4,6 +4,22 @@ We follow [Semantic Versions](https://semver.org/).
 
 ## WIP
 
+## Version 0.4.0
+
+### Fixes
+
+- Updated `default_key` in `RatelimitIO.__init__` to default to `None` instead of `"unknown_key"`, ensuring `kwargs["ip"]` is used when `unique_key` and `default_key` are not provided.
+- Renamed `_prepare_key_and_limit` to `_prepare_key` for clarity.
+- Refactored `_prepare_key` to simplify logic and resolve inconsistencies in key generation.
+- Fixed key handling in `wait` and `a_wait` to correctly validate and apply rate limits.
+- Ensured proper rate-limiting behavior for async and sync decorators with function-specific keys.
+- Addressed issues causing `NoneType` errors when `limit_spec` was not provided in `wait` and `a_wait`.
+
+### Misc
+
+- Enhanced key generation with async/sync-specific prefixes to distinguish between function call types.
+- Updated `virtualenv` dependency from `20.28.1` to `20.29.0` via `poetry update`.
+
 ## Version 0.3.1
 
 ### Fixes

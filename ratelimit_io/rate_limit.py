@@ -2,7 +2,6 @@ import time
 from functools import wraps
 from typing import Callable
 from typing import Optional
-from typing import Tuple
 from typing import Union
 
 import asyncio
@@ -86,7 +85,7 @@ class RatelimitIO:
         is_incoming: bool = False,
         base_url: Optional[str] = None,
         base_limit: Optional[LimitSpec] = None,
-        default_key: Optional[str] = "unknown_key",
+        default_key: Optional[str] = None,
     ):
         """
         Initializes the RatelimitIO instance.
@@ -99,7 +98,6 @@ class RatelimitIO:
             base_limit (Optional[LimitSpec]): Default rate
                 limit for the base URL.
             default_key (Optional[str]): Default unique key for rate limiting.
-                Defaults to "unknown_key".
         """
         if not isinstance(backend, (Redis, AsyncRedis)):
             raise RuntimeError("Unsupported Redis backend.")
@@ -161,20 +159,16 @@ class RatelimitIO:
         def decorator(func: Callable) -> Callable:
             @wraps(func)
             async def async_wrapper(*args, **kwargs):
-                key = (
-                    unique_key
-                    or self.default_key
-                    or kwargs.get("ip", "unknown_ip")
+                key = self._prepare_key(
+                    key=None,
+                    unique_key=unique_key,
+                    func_name=func.__name__,
+                    async_call=True,
+                    **kwargs,
                 )
-                if not key:
-                    raise ValueError(
-                        "Unique key is required. Provide `unique_key`, "
-                        "set `default_key`, "
-                        "or include `ip` in kwargs."
-                    )
 
                 try:
-                    await self.a_wait(f"ratelimit:{key}", limit_spec)
+                    await self.a_wait(key, limit_spec)
                 except RatelimitIOError:
                     if self.is_incoming:
                         raise
@@ -185,20 +179,16 @@ class RatelimitIO:
 
             @wraps(func)
             def sync_wrapper(*args, **kwargs):
-                key = (
-                    unique_key
-                    or self.default_key
-                    or kwargs.get("ip", "unknown_ip")
+                key = self._prepare_key(
+                    key=None,
+                    unique_key=unique_key,
+                    func_name=func.__name__,
+                    async_call=False,
+                    **kwargs,
                 )
-                if not key:
-                    raise ValueError(
-                        "Unique key is required. Provide `unique_key`, "
-                        "set `default_key`, "
-                        "or include `ip` in kwargs."
-                    )
 
                 try:
-                    self.wait(f"ratelimit:{key}", limit_spec)
+                    self.wait(key, limit_spec)
                 except RatelimitIOError:
                     if self.is_incoming:
                         raise
@@ -258,19 +248,24 @@ class RatelimitIO:
             RatelimitIOError: If the rate limit is exceeded and
                 max wait time is reached.
         """
+        if not limit_spec and not self.base_limit:
+            raise ValueError("limit_spec or self.base_limit must be provided.")
+
+        limit_spec = limit_spec or self.base_limit
+
         self._ensure_script_loaded_sync()
 
-        key, limit_spec = self._prepare_key_and_limit(key, limit_spec)
+        key = self._prepare_key(key)
 
         if self.is_incoming:
-            if not self._enforce_limit_sync(key, limit_spec):
+            if not self._enforce_limit_sync(key, limit_spec):  # type: ignore
                 raise RatelimitIOError()
             return
 
         start_time = time.time()
         backoff = backoff_start
 
-        while not self._enforce_limit_sync(key, limit_spec):
+        while not self._enforce_limit_sync(key, limit_spec):  # type: ignore
             if time.time() - start_time > max_wait_time:
                 raise RatelimitIOError(
                     f"Rate limit exceeded for {key}, wait time exceeded."
@@ -303,19 +298,30 @@ class RatelimitIO:
             RatelimitIOError: If the rate limit is exceeded and
                 max wait time is reached.
         """
+        if not limit_spec and not self.base_limit:
+            raise ValueError("limit_spec or self.base_limit must be provided.")
+
+        limit_spec = limit_spec or self.base_limit
+
         await self._ensure_script_loaded_async()
 
-        key, limit_spec = self._prepare_key_and_limit(key, limit_spec)
+        key = self._prepare_key(key)
 
         if self.is_incoming:
-            if not await self._enforce_limit_async(key, limit_spec):
+            if not await self._enforce_limit_async(
+                key,
+                limit_spec,  # type: ignore
+            ):
                 raise RatelimitIOError()
             return
 
         start_time = time.time()
         backoff = backoff_start
 
-        while not await self._enforce_limit_async(key, limit_spec):
+        while not await self._enforce_limit_async(
+            key,
+            limit_spec,  # type: ignore
+        ):
             if time.time() - start_time > max_wait_time:
                 raise RatelimitIOError(
                     f"Rate limit exceeded for {key}, wait time exceeded."
@@ -323,47 +329,47 @@ class RatelimitIO:
             await asyncio.sleep(backoff)
             backoff = min(backoff * 2, backoff_max)
 
-    def _prepare_key_and_limit(
-        self, key: Optional[str] = None, limit_spec: Optional[LimitSpec] = None
-    ) -> Tuple[str, LimitSpec]:
+    def _prepare_key(
+        self,
+        key: Optional[str] = None,
+        unique_key: Optional[str] = None,
+        func_name: Optional[str] = None,
+        async_call: bool = False,
+        **kwargs,
+    ) -> str:
         """
-        Prepares the key and limit specification, falling back to
-            defaults if needed.
+        Prepares the key and limit specification, unifying logic for both
+            decorator and manual call usage.
 
         Args:
-            key (Optional[str]): Unique identifier for the rate limit.
-            limit_spec (Optional[LimitSpec]): Limit specification.
+            key (Optional[str]): Directly provided key.
+            unique_key (Optional[str]): Custom key from decorator or function.
+            func_name (Optional[str]): Name of the decorated function
+                (if applicable).
+            async_call (bool): Whether the call is asynchronous
+                (for key prefix).
+            kwargs (Optional[dict]): Additional keyword arguments
+                (for IP-based keys).
 
         Returns:
-            tuple[str, LimitSpec]: Prepared key and rate specification.
+            str: Fully prepared key.
 
         Raises:
             ValueError: If neither key nor base settings are provided.
         """
-        if not (limit_spec or self.base_limit):
-            raise ValueError("limit_spec or self.base_limit must be provided.")
-
-        requests_for_key: str = (
-            str(limit_spec.requests)
-            if limit_spec
-            else str(self.base_limit.requests)  # type: ignore
-        )
-        time_for_key: str = (
-            str(limit_spec.total_seconds())
-            if limit_spec
-            else str(self.base_limit.total_seconds())  # type: ignore
+        key = (
+            key
+            or unique_key
+            or self.default_key
+            or (kwargs.get("ip") if kwargs else None)
+            or "unknown_key"
         )
 
-        key = key or (
-            f"outgoing:ratelimit-io:{self.base_url}:"
-            f"requests:{requests_for_key}:"
-            f"time:{time_for_key}"
-        )
-        limit_spec = limit_spec or self.base_limit
+        if func_name:
+            prefix = "async" if async_call else "sync"
+            key = f"ratelimit:{prefix}:{key}:{func_name}"
 
-        if not key or not limit_spec:
-            raise ValueError("Key and limit_spec must be provided.")
-        return key, limit_spec
+        return key
 
     def _enforce_limit_sync(self, key: str, limit_spec: LimitSpec) -> bool:
         """
