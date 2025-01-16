@@ -4,13 +4,50 @@ We follow [Semantic Versions](https://semver.org/).
 
 ## WIP
 
-[Unreleased]
-### Added
+## Version 0.5.0
+
+### Features
+
+- Dynamic `is_incoming` Detection:
+  - Added automatic inference for `is_incoming` in decorators based on usage context:
+    - Incoming requests (e.g., API handlers): Raise `RatelimitIOError` when limits are exceeded.
+    - Outgoing requests (e.g., client-side throttling): Wait until a slot is available.
+  - Default behavior is now `is_incoming=True`, suitable for most incoming request use cases.
+  - Explicit `is_incoming=False` can still be set during initialization for outgoing request handling.
+- Removed `base_url` parameter:
+  - Simplified the API by fully replacing `base_url` with `default_key`.
+  - Unified logic for key preparation and eliminated redundancy.
+- Updated `_prepare_key` logic:
+  - Adjusted key priority to: `provided_key > unique_key > default_key > kwargs["ip"] > "unknown_key"`.
+  - Added `async/sync` prefixes to keys for better differentiation in mixed environments.
+- Enhanced decorator functionality:
+  - Supports both synchronous and asynchronous functions.
+  - Automatically applies appropriate behavior for incoming or outgoing requests.
+
+### Fixes
+
+- Fixed issues with key generation for mixed environments:
+  - Resolved edge cases where default keys were incorrectly prioritized.
+  - Ensured robust handling of `kwargs["ip"]` when no `default_key` or `unique_key` is provided.
+
+### Misc
+
+- Updated README and examples:
+  - Added detailed explanation for `is_incoming` behavior and dynamic detection.
+  - Removed all references to `base_url` and clarified usage of `default_key`.
+  - Included examples for both incoming and outgoing request scenarios.
+- Improved error messages for missing rate limit specifications (`limit_spec` or `default_limit`).
+- Increased test coverage to ensure robust handling of edge cases in key generation, rate limiting, and decorator functionality.
+
+## [Unreleased]
+
+### Misc
+
 - Validation in CI workflow to ensure PyPI builds and publishing only occur for release commits with version tags (e.g., `0.4.0`).
 
 ## [Unreleased]
 
-### Documentation
+### Misc
 - Updated `CONTRIBUTING.md`:
   - Added instructions for setting up `pre-commit` hooks.
   - Clarified that `CHANGELOG.md` must be updated before committing.

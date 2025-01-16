@@ -82,9 +82,8 @@ class RatelimitIO:
     def __init__(
         self,
         backend: Union[Redis, AsyncRedis],
-        is_incoming: bool = False,
-        base_url: Optional[str] = None,
-        base_limit: Optional[LimitSpec] = None,
+        is_incoming: Optional[bool] = True,
+        default_limit: Optional[LimitSpec] = None,
         default_key: Optional[str] = None,
     ):
         """
@@ -92,10 +91,12 @@ class RatelimitIO:
 
         Args:
             backend (Redis | AsyncRedis): Redis backend instance.
-            is_incoming (bool): Whether the rate limiter is
-                for incoming requests.
-            base_url (Optional[str]): Base URL for outgoing request limits.
-            base_limit (Optional[LimitSpec]): Default rate
+            is_incoming (Optional[bool]): Mode of usage:
+                - `True` for incoming requests
+                    (raise an error if the limit is exceeded).
+                - `False` for outgoing requests
+                    (wait until a slot is available).
+            default_limit (Optional[LimitSpec]): Default rate
                 limit for the base URL.
             default_key (Optional[str]): Default unique key for rate limiting.
         """
@@ -104,8 +105,7 @@ class RatelimitIO:
 
         self.backend = backend
         self.is_incoming = is_incoming
-        self.base_url = base_url
-        self.base_limit = base_limit
+        self.default_limit = default_limit
         self.default_key = default_key
 
         self._lua_script = b"""
@@ -139,28 +139,27 @@ class RatelimitIO:
         Args:
             func (Callable): Function to decorate.
             limit_spec (Optional[LimitSpec]): Rate limit specification.
-                Defaults to `self.base_limit`.
+                Defaults to `self.default_limit`.
             unique_key (Optional[str]): Optional unique key for rate limiting.
                 If not provided, tries `self.default_key` or `kwargs["ip"]`.
 
         Returns:
             Callable: Decorated function.
         """
-        if func and callable(func):
-            return self(limit_spec=self.base_limit)(func)
-
-        limit_spec = limit_spec or self.base_limit
+        limit_spec = limit_spec or self.default_limit
         if not limit_spec:
             raise ValueError(
                 "Rate limit specification is missing. Provide a limit_spec "
-                "or ensure base_limit is set during initialization."
+                "or ensure default_limit is set during initialization."
             )
+
+        inferred_incoming = func is not None and callable(func)
 
         def decorator(func: Callable) -> Callable:
             @wraps(func)
             async def async_wrapper(*args, **kwargs):
                 key = self._prepare_key(
-                    key=None,
+                    provided_key=None,
                     unique_key=unique_key,
                     func_name=func.__name__,
                     async_call=True,
@@ -170,7 +169,7 @@ class RatelimitIO:
                 try:
                     await self.a_wait(key, limit_spec)
                 except RatelimitIOError:
-                    if self.is_incoming:
+                    if inferred_incoming or self.is_incoming:
                         raise
                     raise RuntimeError(
                         f"Rate limit exceeded in {func.__name__}"
@@ -180,7 +179,7 @@ class RatelimitIO:
             @wraps(func)
             def sync_wrapper(*args, **kwargs):
                 key = self._prepare_key(
-                    key=None,
+                    provided_key=None,
                     unique_key=unique_key,
                     func_name=func.__name__,
                     async_call=False,
@@ -190,7 +189,7 @@ class RatelimitIO:
                 try:
                     self.wait(key, limit_spec)
                 except RatelimitIOError:
-                    if self.is_incoming:
+                    if inferred_incoming or self.is_incoming:
                         raise
                     raise RuntimeError(
                         f"Rate limit exceeded in {func.__name__}"
@@ -203,7 +202,7 @@ class RatelimitIO:
                 else sync_wrapper
             )
 
-        return decorator
+        return decorator(func) if func and callable(func) else decorator
 
     def __enter__(self) -> "RatelimitIO":
         """Synchronous context manager."""
@@ -238,7 +237,7 @@ class RatelimitIO:
             key (Optional[str]): Unique identifier for the rate limit.
                 Defaults to `base_url`.
             limit_spec (Optional[LimitSpec]): Rate specification.
-                Defaults to `base_limit`.
+                Defaults to `default_limit`.
             max_wait_time (float): Maximum wait time in seconds
                 before raising an error.
             backoff_start (float): Initial backoff delay in seconds.
@@ -248,10 +247,12 @@ class RatelimitIO:
             RatelimitIOError: If the rate limit is exceeded and
                 max wait time is reached.
         """
-        if not limit_spec and not self.base_limit:
-            raise ValueError("limit_spec or self.base_limit must be provided.")
+        if not limit_spec and not self.default_limit:
+            raise ValueError(
+                "limit_spec or self.default_limit must be provided."
+            )
 
-        limit_spec = limit_spec or self.base_limit
+        limit_spec = limit_spec or self.default_limit
 
         self._ensure_script_loaded_sync()
 
@@ -288,7 +289,7 @@ class RatelimitIO:
             key (Optional[str]): Unique identifier for the rate limit.
                 Defaults to `base_url`.
             limit_spec (Optional[LimitSpec]): Rate specification.
-                Defaults to `base_limit`.
+                Defaults to `default_limit`.
             max_wait_time (float): Maximum wait time in seconds
                 before raising an error.
             backoff_start (float): Initial backoff delay in seconds.
@@ -298,10 +299,12 @@ class RatelimitIO:
             RatelimitIOError: If the rate limit is exceeded and
                 max wait time is reached.
         """
-        if not limit_spec and not self.base_limit:
-            raise ValueError("limit_spec or self.base_limit must be provided.")
+        if not limit_spec and not self.default_limit:
+            raise ValueError(
+                "limit_spec or self.default_limit must be provided."
+            )
 
-        limit_spec = limit_spec or self.base_limit
+        limit_spec = limit_spec or self.default_limit
 
         await self._ensure_script_loaded_async()
 
@@ -331,37 +334,36 @@ class RatelimitIO:
 
     def _prepare_key(
         self,
-        key: Optional[str] = None,
+        provided_key: Optional[str] = None,
         unique_key: Optional[str] = None,
         func_name: Optional[str] = None,
         async_call: bool = False,
         **kwargs,
     ) -> str:
         """
-        Prepares the key and limit specification, unifying logic for both
+        Prepares the key based on priority and context, unifying logic for both
             decorator and manual call usage.
 
         Args:
-            key (Optional[str]): Directly provided key.
-            unique_key (Optional[str]): Custom key from decorator or function.
-            func_name (Optional[str]): Name of the decorated function
-                (if applicable).
-            async_call (bool): Whether the call is asynchronous
-                (for key prefix).
-            kwargs (Optional[dict]): Additional keyword arguments
-                (for IP-based keys).
+            provided_key (Optional[str]): Directly provided key,
+                highest priority.
+            unique_key (Optional[str]): Unique key, e.g.,
+                from a decorator call.
+            func_name (Optional[str]): Name of the decorated function.
+            async_call (bool): Whether the call is asynchronous.
+            kwargs (Optional[dict]): Additional context, such as `ip`.
 
         Returns:
-            str: Fully prepared key.
+            str: Fully prepared Redis key.
 
         Raises:
             ValueError: If neither key nor base settings are provided.
         """
         key = (
-            key
+            provided_key
             or unique_key
             or self.default_key
-            or (kwargs.get("ip") if kwargs else None)
+            or kwargs.get("ip")
             or "unknown_key"
         )
 
@@ -383,25 +385,27 @@ class RatelimitIO:
             bool: True if the request is allowed, False otherwise.
         """
         try:
-            allowed = self.backend.evalsha(
-                self._lua_script_hash,
-                1,
-                self._generate_key(key),
-                str(limit_spec.requests),
-                str(limit_spec.total_seconds()),
-            )
-            return bool(allowed)
-        except NoScriptError:
-            self._ensure_script_loaded_sync()
-            try:
-                allowed = self.backend.evalsha(
+            return bool(
+                self.backend.evalsha(
                     self._lua_script_hash,
                     1,
                     self._generate_key(key),
                     str(limit_spec.requests),
                     str(limit_spec.total_seconds()),
                 )
-                return bool(allowed)
+            )
+        except NoScriptError:
+            self._ensure_script_loaded_sync()
+            try:
+                return bool(
+                    self.backend.evalsha(
+                        self._lua_script_hash,
+                        1,
+                        self._generate_key(key),
+                        str(limit_spec.requests),
+                        str(limit_spec.total_seconds()),
+                    )
+                )
             except NoScriptError as exc:
                 raise RuntimeError(
                     "Failed to load Lua script into Redis."
@@ -421,28 +425,31 @@ class RatelimitIO:
             bool: True if the request is allowed, False otherwise.
         """
         try:
-            allowed = await self.backend.evalsha(  # type: ignore
-                self._lua_script_hash,
-                1,
-                self._generate_key(key),
-                str(limit_spec.requests),
-                str(limit_spec.total_seconds()),
-            )
-            return bool(allowed)
-        except NoScriptError:
-            await self._ensure_script_loaded_async()
-            try:
-                allowed = await self.backend.evalsha(  # type: ignore
+            return bool(
+                await self.backend.evalsha(  # type: ignore
                     self._lua_script_hash,
                     1,
                     self._generate_key(key),
                     str(limit_spec.requests),
                     str(limit_spec.total_seconds()),
                 )
-                return bool(allowed)
+            )
+        except NoScriptError:
+            await self._ensure_script_loaded_async()
+            try:
+                return bool(
+                    await self.backend.evalsha(  # type: ignore
+                        self._lua_script_hash,
+                        1,
+                        self._generate_key(key),
+                        str(limit_spec.requests),
+                        str(limit_spec.total_seconds()),
+                    )
+                )
             except NoScriptError as exc:
                 raise RuntimeError(
-                    "Failed to load Lua script into Redis."
+                    f"Failed to load Lua script into "
+                    f"Redis for key '{key}'. Limit: {limit_spec}"
                 ) from exc
 
     def _generate_key(self, identifier: str) -> str:

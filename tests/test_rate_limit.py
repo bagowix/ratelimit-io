@@ -61,8 +61,7 @@ def limiter(real_redis_client) -> RatelimitIO:
     """Fixture for RatelimitIO instance with real Redis."""
     return RatelimitIO(
         backend=real_redis_client,
-        base_url="https://api.example.com",
-        base_limit=LimitSpec(5, seconds=1),
+        default_limit=LimitSpec(5, seconds=1),
     )
 
 
@@ -71,8 +70,7 @@ async def async_limiter(real_async_redis_client) -> RatelimitIO:
     """Fixture for RatelimitIO instance with real Redis (async)."""
     return RatelimitIO(
         backend=real_async_redis_client,
-        base_url="https://api.example.com",
-        base_limit=LimitSpec(5, seconds=1),
+        default_limit=LimitSpec(5, seconds=1),
     )
 
 
@@ -200,7 +198,7 @@ async def test_default_key_incoming_behavior_async(async_limiter):
 
 def test_sync_decorator_without_args(limiter):
     """Test synchronous decorator without arguments."""
-
+    limiter.is_incoming = False
     limiter.default_key = "default_test_key"
 
     @limiter
@@ -221,7 +219,7 @@ def test_sync_decorator_without_args(limiter):
 @pytest.mark.asyncio
 async def test_async_decorator_without_args(async_limiter):
     """Test asynchronous decorator without arguments."""
-
+    async_limiter.is_incoming = False
     async_limiter.default_key = "default_async_key"
 
     @async_limiter
@@ -258,10 +256,9 @@ def test_missing_key_and_limit_spec(real_redis_client):
     """Test missing key and limit_spec for `wait`."""
     limiter = RatelimitIO(
         backend=real_redis_client,
-        base_url="https://api.example.com",
     )
     with pytest.raises(
-        ValueError, match="limit_spec or self.base_limit must be provided"
+        ValueError, match="limit_spec or self.default_limit must be provided"
     ):
         limiter.wait(limit_spec=None)
 
@@ -396,13 +393,12 @@ def test_prepare_key_with_base_url():
     """Test key generation with base_url."""
     limiter = RatelimitIO(
         backend=Redis(decode_responses=True),
-        base_url="https://api.example.com",
     )
-    limiter.base_limit = LimitSpec(5, seconds=1)
+    limiter.default_limit = LimitSpec(5, seconds=1)
 
     key = limiter._prepare_key(None)
     assert key.startswith("unknown_key")
-    assert limiter.base_limit.requests == 5
+    assert limiter.default_limit.requests == 5
 
 
 def test_ensure_script_loaded_sync(limiter, real_redis_client):
@@ -511,6 +507,7 @@ def test_limitspec_no_time_frame():
 
 def test_default_key_usage(limiter):
     """Test the usage of default_key when unique_key is not provided."""
+    limiter.is_incoming = False
     limiter.default_key = "default_test_key"
 
     @limiter
@@ -531,6 +528,7 @@ def test_default_key_usage(limiter):
 
 def test_override_default_key(limiter):
     """Test overriding default_key with unique_key."""
+    limiter.is_incoming = False
     limiter.default_key = "default_test_key"
 
     @limiter(
@@ -553,7 +551,7 @@ def test_override_default_key(limiter):
 
 def test_priority_unique_key_over_default_key(limiter):
     """Test that unique_key takes precedence over default_key."""
-
+    limiter.is_incoming = False
     limiter.default_key = "default_test_key"
 
     @limiter(
@@ -574,7 +572,7 @@ def test_priority_unique_key_over_default_key(limiter):
 
 def test_priority_default_key_over_ip(limiter):
     """Test that default_key takes precedence over ip from kwargs."""
-
+    limiter.is_incoming = False
     limiter.default_key = "default_test_key"
 
     @limiter
@@ -593,7 +591,7 @@ def test_priority_default_key_over_ip(limiter):
 
 def test_ip_key_as_fallback(limiter):
     """Test that ip from kwargs is used if no other keys are provided."""
-
+    limiter.is_incoming = False
     limiter.default_key = None
 
     @limiter
@@ -610,8 +608,8 @@ def test_ip_key_as_fallback(limiter):
     assert elapsed_time >= 0.9, "Wait time not applied with ip key"
 
 
-def test_call_decorator_no_limit_spec_or_base_limit():
-    """Test decorator raises ValueError if no limit_spec or base_limit."""
+def test_call_decorator_no_limit_spec_or_default_limit():
+    """Test decorator raises ValueError if no limit_spec or default_limit."""
     limiter = RatelimitIO(backend=Redis(decode_responses=True))
     with pytest.raises(
         ValueError, match="Rate limit specification is missing"
@@ -620,3 +618,40 @@ def test_call_decorator_no_limit_spec_or_base_limit():
         @limiter
         def func():
             pass
+
+
+def test_override_is_incoming_false_sync(limiter):
+    """Test overriding is_incoming=False for sync decorators."""
+    limiter.is_incoming = False
+
+    @limiter
+    def limited_function():
+        return "success"
+
+    for _ in range(5):
+        assert limited_function() == "success"
+
+    start_time = time.time()
+    limited_function()
+    elapsed_time = time.time() - start_time
+
+    assert elapsed_time >= 0.9, "Wait time not applied for outgoing requests"
+
+
+@pytest.mark.asyncio
+async def test_override_is_incoming_false_async(async_limiter):
+    """Test overriding is_incoming=False for async decorators."""
+    async_limiter.is_incoming = False
+
+    @async_limiter
+    async def limited_function():
+        return "success"
+
+    for _ in range(5):
+        assert await limited_function() == "success"
+
+    start_time = time.time()
+    await limited_function()
+    elapsed_time = time.time() - start_time
+
+    assert elapsed_time >= 0.9, "Wait time not applied for outgoing requests"

@@ -45,11 +45,17 @@ from ratelimit_io import RatelimitIO, LimitSpec
 from redis import Redis
 
 redis_client = Redis(host="localhost", port=6379)
-limiter = RatelimitIO(backend=redis_client, base_limit=LimitSpec(requests=10, seconds=60))
+limiter = RatelimitIO(
+    backend=redis_client,
+    default_limit=LimitSpec(requests=10, seconds=60),
+    default_key="global_limit",
+)
+
 
 @limiter
 def fetch_data():
-    return "Request succeeded!"
+  return "Request succeeded!"
+
 
 # Use the decorated function
 fetch_data()
@@ -62,11 +68,17 @@ from ratelimit_io import RatelimitIO, LimitSpec
 from redis.asyncio import Redis as AsyncRedis
 
 async_redis_client = AsyncRedis(host="localhost", port=6379)
-async_limiter = RatelimitIO(backend=async_redis_client, base_limit=LimitSpec(requests=10, seconds=60))
+async_limiter = RatelimitIO(
+    backend=async_redis_client,
+    default_limit=LimitSpec(requests=10, seconds=60),
+    default_key="global_limit",
+)
+
 
 @async_limiter
 async def fetch_data():
-    return "Request succeeded!"
+  return "Request succeeded!"
+
 
 # Use the decorated function
 await fetch_data()
@@ -74,6 +86,7 @@ await fetch_data()
 
 ### Incoming vs. Outgoing Request Handling (`is_incoming`)
 
+- The `default_key` or a dynamically generated key (e.g., based on `unique_key` or `kwargs["ip"]`) determines the rate limit bucket.
 - When `is_incoming=True`, the rate limiter will immediately raise a `RatelimitIOError` when limits are exceeded.
 - When `is_incoming=False` (default), the rate limiter will wait until a slot becomes available.
 
@@ -118,6 +131,35 @@ async_limiter = RatelimitIO(backend=async_redis_client)
 async with async_limiter:
     await async_limiter.a_wait("user:456", LimitSpec(requests=5, seconds=10))
 ```
+## Dynamic `is_incoming` Detection
+
+Automatically determines request type (incoming or outgoing) based on the context. Incoming requests (default) raise `RatelimitIOError` if limits are exceeded, while outgoing requests wait for a slot.
+
+Examples:
+
+```python
+# Default behavior (is_incoming=True)
+@limiter
+def incoming_request():
+    return "Handled incoming request!"
+
+for _ in range(5):
+    incoming_request()
+
+# Raises RatelimitIOError after 5 requests
+incoming_request()
+
+# -------------------------------------------------------------------------------------------------------
+
+# Outgoing request handling
+limiter.is_incoming = False
+
+for _ in range(5):
+    limiter.wait("outgoing_request", LimitSpec(requests=5, seconds=1))
+
+# Waits for a slot to become available
+limiter.wait("outgoing_request", LimitSpec(requests=5, seconds=1))
+```
 
 ## Error Handling for 429 Responses
 
@@ -132,26 +174,28 @@ from redis.asyncio import Redis as AsyncRedis
 app = FastAPI()
 redis_client = AsyncRedis(host="localhost", port=6379)
 limiter = RatelimitIO(
-    backend=redis_client,
-    base_limit=LimitSpec(requests=5, seconds=1),
-    is_incoming=True
+  backend=redis_client,
+  default_limit=LimitSpec(requests=5, seconds=1),
+  is_incoming=True
 )
+
 
 @app.middleware("http")
 async def ratelimit_middleware(request: Request, call_next):
-    try:
-        response = await call_next(request)
-        return response
-    except RatelimitIOError as exc:
-        return JSONResponse(
-            status_code=exc.status_code,
-            content={"detail": exc.detail}
-        )
+  try:
+    response = await call_next(request)
+    return response
+  except RatelimitIOError as exc:
+    return JSONResponse(
+      status_code=exc.status_code,
+      content={"detail": exc.detail}
+    )
+
 
 @app.get("/fetch")
 @limit
 async def fetch_data():
-    return {"message": "Request succeeded!"}
+  return {"message": "Request succeeded!"}
 ```
 
 ### Django Middleware Example
@@ -165,31 +209,30 @@ from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-
 redis = Redis("localhost", port=6379)
 limit = RatelimitIO(
-    backend=redis,
-    base_limit=LimitSpec(requests=5, seconds=1),
-    is_incoming=True,
+  backend=redis,
+  default_limit=LimitSpec(requests=5, seconds=1),
+  is_incoming=True,
 )
 
 
 class RatelimitMiddleware(MiddlewareMixin):
-    def process_exception(self, request, exception):
-        if isinstance(exception, RatelimitIOError):
-            return JsonResponse(
-                {"detail": exception.detail},
-                status=exception.status_code,
-            )
-        return None
+  def process_exception(self, request, exception):
+    if isinstance(exception, RatelimitIOError):
+      return JsonResponse(
+        {"detail": exception.detail},
+        status=exception.status_code,
+      )
+    return None
 
 
 class Foo(APIView):
-    permission_classes = ()
+  permission_classes = ()
 
-    @limit
-    def get(self, request, *args, **kwargs):
-        return Response(data={"message": "ok"}, status=status.HTTP_200_OK)
+  @limit
+  def get(self, request, *args, **kwargs):
+    return Response(data={"message": "ok"}, status=status.HTTP_200_OK)
 
 ```
 
@@ -213,6 +256,18 @@ def handle_ratelimit_error(error):
 def fetch_data():
     return jsonify({"message": "Request succeeded!"})
 ```
+
+## Key Handling Priority
+
+The rate limiter determines the key for requests in the following priority:
+
+1. `provided_key` (directly passed to `wait`, `a_wait`, or decorator).
+2. `unique_key` (e.g., from a decorator argument).
+3. `default_key` (set during `RatelimitIO` initialization).
+4. `kwargs.get("ip")` (from additional arguments passed to the decorated function).
+5. `"unknown_key"` (fallback if no other key is found).
+
+This flexible approach ensures minimal configuration while maintaining granular control when needed.
 
 ## License
 
