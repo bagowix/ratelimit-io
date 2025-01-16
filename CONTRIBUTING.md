@@ -26,6 +26,16 @@ To activate the virtual environment, run:
 poetry shell
 ```
 
+## Setting Up Pre-Commit Hooks
+
+We use [pre-commit](https://pre-commit.com/) to automate code quality checks. Before committing any changes, ensure you install the pre-commit hooks:
+
+```bash
+pre-commit install
+```
+
+These hooks will automatically run `ruff`, `mypy`, and other checks on every commit.
+
 ## Development Workflow
 
 ### Running Tests
@@ -36,27 +46,26 @@ We use `pytest` for testing. To run all tests:
 pytest
 ```
 
-### Linting
+### Pre-Commit Hooks
 
-We use `ruff` for linting and enforcing style guidelines. To run the linter:
+After setting up `pre-commit`, the following checks will run automatically when you commit your changes:
 
-```bash
-ruff check .
-```
+- Code linting (`ruff`)
+- Type checking (`mypy`)
+- Formatting and other static checks
 
-You can automatically fix issues with:
-
-```bash
-ruff check . --fix
-```
-
-### Type Checking
-
-We use `mypy` to enforce type safety. To run type checks:
+You can manually trigger all pre-commit hooks to verify your code before committing:
 
 ```bash
-mypy .
+pre-commit run --all-files
 ```
+
+### Updating `CHANGELOG.md`
+
+Before committing, ensure that you update the `CHANGELOG.md` file to include a brief summary of your changes:
+
+- Use appropriate categories (e.g., `Fixes`, `Features`, `Misc`).
+- Write concise, clear descriptions of your changes.
 
 ## Submitting Your Code
 
@@ -99,17 +108,13 @@ Ensure the following tasks are completed:
 pytest
 ```
 
-2. Code adheres to the style guide:
+2. Pre-commit hooks pass:
 
 ```bash
-ruff check .
+pre-commit run --all-files
 ```
 
-3. Type checks pass:
-
-```bash
-mypy .
-```
+3. The `CHANGELOG.md` file is updated with relevant changes.
 
 4. Add or update tests to cover new functionality.
 

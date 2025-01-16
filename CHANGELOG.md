@@ -4,6 +4,14 @@ We follow [Semantic Versions](https://semver.org/).
 
 ## WIP
 
+## [Unreleased]
+
+### Documentation
+- Updated `CONTRIBUTING.md`:
+  - Added instructions for setting up `pre-commit` hooks.
+  - Clarified that `CHANGELOG.md` must be updated before committing.
+  - Removed redundant manual steps for `ruff` and `mypy`, as these are handled by `pre-commit`.
+
 ## Version 0.4.0
 
 ### Fixes
