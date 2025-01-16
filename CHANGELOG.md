@@ -4,6 +4,10 @@ We follow [Semantic Versions](https://semver.org/).
 
 ## WIP
 
+[Unreleased]
+### Added
+- Validation in CI workflow to ensure PyPI builds and publishing only occur for release commits with version tags (e.g., `0.4.0`).
+
 ## [Unreleased]
 
 ### Documentation

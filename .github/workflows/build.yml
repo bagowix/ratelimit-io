@@ -19,6 +19,14 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v3
 
+      - name: Check if commit message is a release version
+        id: check_release
+        run: |
+          if [[ ! "${{ github.event.head_commit.message }}" =~ ^(100|[1-9]?[0-9])\.(100|[1-9]?[0-9])\.(100|[1-9]?[0-9])$ ]]; then
+            echo "This is not a release commit. Skipping build and publish steps."
+            exit 1
+          fi
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
