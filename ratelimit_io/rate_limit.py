@@ -1,8 +1,10 @@
 import logging
 import time
 from functools import wraps
+from types import TracebackType
 from typing import Callable
 from typing import Optional
+from typing import Type
 from typing import Union
 
 import asyncio
@@ -267,6 +269,36 @@ class RatelimitIO:
             )
 
         return decorator(func) if func and callable(func) else decorator
+
+    async def __aenter__(self) -> "RatelimitIO":
+        """
+        Ensures the Lua script is loaded into Redis when entering the context.
+
+        Returns:
+            RatelimitIO: The instance of the rate limiter, ready for use.
+        """
+        await self._ensure_script_loaded_async()
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: Optional[Type[BaseException]],
+        exc_val: Optional[BaseException],
+        exc_tb: Optional[TracebackType],
+    ) -> Union[None, bool]:
+        """
+        Handles cleanup when exiting the context.
+
+        Args:
+            exc_type (Type): The type of exception raised (if any).
+            exc_val (BaseException): The exception instance (if any).
+            exc_tb (TracebackType): The traceback object (if any).
+
+        Returns:
+            Union[None, bool]: If returning `True`,
+                suppresses the exception; otherwise, propagates it.
+        """
+        pass
 
     def wait(
         self,

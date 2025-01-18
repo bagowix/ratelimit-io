@@ -4,6 +4,15 @@ We follow [Semantic Versions](https://semver.org/).
 
 ## WIP
 
+## Version 0.6.2
+
+### Features
+
+- **Asynchronous Context Manager Support**:
+  - Added `__aenter__` and `__aexit__` methods to `RatelimitIO` for use as an asynchronous context manager.
+  - Ensures Lua scripts are automatically loaded into Redis when entering the context.
+  - Simplifies resource management and integration in async frameworks like FastAPI and aiohttp.
+
 ## Version 0.6.1
 
 ### Misc

@@ -76,7 +76,7 @@ async def async_limiter(real_async_redis_client) -> RatelimitIO:
     )
 
 
-def test_sync_limit_incoming(limiter):
+def test_sync_limit_incoming(limiter) -> None:
     """Test synchronous rate limiting with is_incoming=True."""
     limiter.is_incoming = True
     key = "sync_incoming_test"
@@ -89,7 +89,7 @@ def test_sync_limit_incoming(limiter):
 
 
 @pytest.mark.asyncio
-async def test_async_limit_incoming(async_limiter):
+async def test_async_limit_incoming(async_limiter) -> None:
     """Test asynchronous rate limiting with is_incoming=True."""
     async_limiter.is_incoming = True
     key = "async_incoming_test"
@@ -102,7 +102,7 @@ async def test_async_limit_incoming(async_limiter):
 
 
 @pytest.mark.asyncio
-async def test_async_decorator_incoming(async_limiter):
+async def test_async_decorator_incoming(async_limiter) -> None:
     """Test asynchronous decorator usage with is_incoming=True."""
     async_limiter.is_incoming = True
 
@@ -119,7 +119,7 @@ async def test_async_decorator_incoming(async_limiter):
         await limited_function()
 
 
-def test_sync_decorator_incoming(limiter):
+def test_sync_decorator_incoming(limiter) -> None:
     """Test synchronous decorator usage with is_incoming=True."""
     limiter.is_incoming = True
 
@@ -136,7 +136,7 @@ def test_sync_decorator_incoming(limiter):
         limited_function()
 
 
-def test_sync_limit_outgoing(limiter):
+def test_sync_limit_outgoing(limiter) -> None:
     """Test synchronous rate limiting with is_incoming=False."""
     limiter.is_incoming = False
     key = "sync_outgoing_test"
@@ -152,7 +152,7 @@ def test_sync_limit_outgoing(limiter):
 
 
 @pytest.mark.asyncio
-async def test_async_limit_outgoing(async_limiter):
+async def test_async_limit_outgoing(async_limiter) -> None:
     """Test asynchronous rate limiting with is_incoming=False."""
     async_limiter.is_incoming = False
     key = "async_outgoing_test"
@@ -167,7 +167,7 @@ async def test_async_limit_outgoing(async_limiter):
     assert elapsed_time >= 0.9, "Wait time not applied for outgoing request"
 
 
-def test_default_key_incoming_behavior(limiter):
+def test_default_key_incoming_behavior(limiter) -> None:
     """Test default_key behavior when is_incoming=True."""
     limiter.is_incoming = True
     limiter.default_key = "default_key_incoming"
@@ -184,7 +184,7 @@ def test_default_key_incoming_behavior(limiter):
 
 
 @pytest.mark.asyncio
-async def test_default_key_incoming_behavior_async(async_limiter):
+async def test_default_key_incoming_behavior_async(async_limiter) -> None:
     """Test default_key behavior when is_incoming=True (async)."""
     async_limiter.is_incoming = True
     async_limiter.default_key = "default_async_key"
@@ -200,7 +200,7 @@ async def test_default_key_incoming_behavior_async(async_limiter):
         await limited_function()
 
 
-def test_sync_decorator_without_args(limiter):
+def test_sync_decorator_without_args(limiter) -> None:
     """Test synchronous decorator without arguments."""
     limiter.is_incoming = False
     limiter.default_key = "default_test_key"
@@ -212,7 +212,6 @@ def test_sync_decorator_without_args(limiter):
     for _ in range(5):
         assert limited_function() == "success"
 
-    # Превышение лимита вызывает задержку
     start_time = time.time()
     limited_function()
     elapsed_time = time.time() - start_time
@@ -221,7 +220,7 @@ def test_sync_decorator_without_args(limiter):
 
 
 @pytest.mark.asyncio
-async def test_async_decorator_without_args(async_limiter):
+async def test_async_decorator_without_args(async_limiter) -> None:
     """Test asynchronous decorator without arguments."""
     async_limiter.is_incoming = False
     async_limiter.default_key = "default_async_key"
@@ -233,7 +232,6 @@ async def test_async_decorator_without_args(async_limiter):
     for _ in range(5):
         assert await limited_function() == "success"
 
-    # Превышение лимита вызывает задержку
     start_time = time.time()
     await limited_function()
     elapsed_time = time.time() - start_time
@@ -241,7 +239,7 @@ async def test_async_decorator_without_args(async_limiter):
     assert elapsed_time >= 0.9, "Wait time not applied with default_key"
 
 
-def test_missing_key_and_limit_spec(real_redis_client):
+def test_missing_key_and_limit_spec(real_redis_client) -> None:
     """Test missing key and limit_spec for `wait`."""
     limiter = RatelimitIO(
         backend=real_redis_client,
@@ -253,7 +251,7 @@ def test_missing_key_and_limit_spec(real_redis_client):
 
 
 @pytest.mark.asyncio
-async def test_redis_connection_error():
+async def test_redis_connection_error() -> None:
     """Test Redis connection error handling."""
     invalid_client = AsyncRedis(host="localhost", port=12345)
     limiter = RatelimitIO(backend=invalid_client)
@@ -262,13 +260,13 @@ async def test_redis_connection_error():
         await limiter.a_wait("unreachable", LimitSpec(5, seconds=1))
 
 
-def test_invalid_backend_type():
+def test_invalid_backend_type() -> None:
     """Test invalid backend type."""
     with pytest.raises(RuntimeError, match="Unsupported Redis backend"):
-        RatelimitIO(backend=None)
+        RatelimitIO(backend=None)  # type: ignore[arg-type]
 
 
-def test_key_generation(limiter):
+def test_key_generation(limiter) -> None:
     """Test key generation for consistency."""
     key = limiter._generate_key("test_key")
     assert isinstance(key, str)
@@ -276,7 +274,7 @@ def test_key_generation(limiter):
 
 
 @pytest.mark.asyncio
-async def test_lua_script_loading(async_limiter):
+async def test_lua_script_loading(async_limiter) -> None:
     """Test Lua script loading."""
     await async_limiter._ensure_script_loaded_async()
     exists = await async_limiter.backend.script_exists(
@@ -288,21 +286,21 @@ async def test_lua_script_loading(async_limiter):
 @pytest.mark.asyncio
 async def test_async_lua_script_not_loaded(
     async_limiter, real_async_redis_client
-):
+) -> None:
     """Test behavior when Lua script is not loaded (async)."""
     await real_async_redis_client.script_flush()
 
     await async_limiter.a_wait("test_key", LimitSpec(requests=5, seconds=1))
 
 
-def test_sync_lua_script_not_loaded(limiter, real_redis_client):
+def test_sync_lua_script_not_loaded(limiter, real_redis_client) -> None:
     """Test behavior when Lua script is not loaded (sync)."""
     real_redis_client.script_flush()
 
     limiter.wait("test_key", LimitSpec(requests=5, seconds=1))
 
 
-def test_limit_spec_total_seconds():
+def test_limit_spec_total_seconds() -> None:
     """Test all branches of LimitSpec.total_seconds."""
     with pytest.raises(
         ValueError,
@@ -351,13 +349,13 @@ def test_limit_spec_total_seconds():
     assert limit.total_seconds() == 7350
 
 
-def test_limit_spec_str():
+def test_limit_spec_str() -> None:
     """Test string representation of LimitSpec."""
     limit = LimitSpec(requests=5, seconds=30)
     assert str(limit) == "5/30s"
 
 
-def test_enforce_limit_sync_noscript_error(limiter, real_redis_client):
+def test_enforce_limit_sync_noscript_error(limiter, real_redis_client) -> None:
     """Test NoScriptError handling in _enforce_limit_sync."""
     limiter.backend.script_flush()
     key = "noscript_test"
@@ -369,7 +367,7 @@ def test_enforce_limit_sync_noscript_error(limiter, real_redis_client):
 @pytest.mark.asyncio
 async def test_enforce_limit_async_noscript_error(
     async_limiter, real_async_redis_client
-):
+) -> None:
     """Test NoScriptError handling in _enforce_limit_async."""
     await real_async_redis_client.script_flush()
     key = "async_noscript_test"
@@ -378,7 +376,7 @@ async def test_enforce_limit_async_noscript_error(
     assert await async_limiter._enforce_limit_async(key, limit)
 
 
-def test_prepare_key_with_base_url():
+def test_prepare_key_with_base_url() -> None:
     """Test key generation with base_url."""
     limiter = RatelimitIO(
         backend=Redis(decode_responses=True),
@@ -390,7 +388,7 @@ def test_prepare_key_with_base_url():
     assert limiter.default_limit.requests == 5
 
 
-def test_ensure_script_loaded_sync(limiter, real_redis_client):
+def test_ensure_script_loaded_sync(limiter, real_redis_client) -> None:
     """Test Lua script loading in _ensure_script_loaded_sync."""
     real_redis_client.script_flush()
 
@@ -400,14 +398,14 @@ def test_ensure_script_loaded_sync(limiter, real_redis_client):
 @pytest.mark.asyncio
 async def test_ensure_script_loaded_async(
     async_limiter, real_async_redis_client
-):
+) -> None:
     """Test Lua script loading in _ensure_script_loaded_async."""
     await real_async_redis_client.script_flush()
 
     await async_limiter._ensure_script_loaded_async()
 
 
-def test_invalid_limit_spec():
+def test_invalid_limit_spec() -> None:
     """Test invalid LimitSpec initialization."""
     with pytest.raises(ValueError, match="Requests must be greater than 0."):
         LimitSpec(requests=0)
@@ -419,7 +417,7 @@ def test_invalid_limit_spec():
         LimitSpec(requests=5, seconds=0, minutes=0, hours=0)
 
 
-def test_no_script_error_in_enforce_limit_sync(limiter):
+def test_no_script_error_in_enforce_limit_sync(limiter) -> None:
     """Test NoScriptError handling for _enforce_limit_sync."""
     limiter.backend.script_flush()
     key = "noscript_test"
@@ -428,7 +426,7 @@ def test_no_script_error_in_enforce_limit_sync(limiter):
 
 
 @pytest.mark.asyncio
-async def test_no_script_error_in_enforce_limit_async(async_limiter):
+async def test_no_script_error_in_enforce_limit_async(async_limiter) -> None:
     """Test NoScriptError handling for _enforce_limit_async."""
     await async_limiter.backend.script_flush()
     key = "noscript_async_test"
@@ -436,7 +434,7 @@ async def test_no_script_error_in_enforce_limit_async(async_limiter):
     assert await async_limiter._enforce_limit_async(key, limit) is True
 
 
-def test_enforce_limit_sync_failure(limiter):
+def test_enforce_limit_sync_failure(limiter) -> None:
     """Test _enforce_limit_sync failure case."""
     key = "failure_test"
     limit = LimitSpec(requests=1, seconds=1)
@@ -447,7 +445,7 @@ def test_enforce_limit_sync_failure(limiter):
 
 
 @pytest.mark.asyncio
-async def test_enforce_limit_async_failure(async_limiter):
+async def test_enforce_limit_async_failure(async_limiter) -> None:
     """Test _enforce_limit_async failure case."""
     key = "async_failure_test"
     limit = LimitSpec(requests=1, seconds=1)
@@ -457,7 +455,7 @@ async def test_enforce_limit_async_failure(async_limiter):
     assert not await async_limiter._enforce_limit_async(key, limit)
 
 
-def test_sync_wrapper_no_exceptions(limiter):
+def test_sync_wrapper_no_exceptions(limiter) -> None:
     """Test sync wrapper in the decorator."""
 
     @limiter(LimitSpec(requests=5, seconds=1), unique_key="sync_wrapper_test")
@@ -469,7 +467,7 @@ def test_sync_wrapper_no_exceptions(limiter):
 
 
 @pytest.mark.asyncio
-async def test_async_wrapper_no_exceptions(async_limiter):
+async def test_async_wrapper_no_exceptions(async_limiter) -> None:
     """Test async wrapper in the decorator."""
 
     @async_limiter(
@@ -482,19 +480,19 @@ async def test_async_wrapper_no_exceptions(async_limiter):
         assert await limited_function() == "success"
 
 
-def test_limitspec_invalid_requests():
+def test_limitspec_invalid_requests() -> None:
     """Test LimitSpec raises an error for non-positive requests."""
     with pytest.raises(ValueError, match="Requests must be greater than 0."):
         LimitSpec(requests=0)
 
 
-def test_limitspec_no_time_frame():
+def test_limitspec_no_time_frame() -> None:
     """Test LimitSpec raises an error when no time frame is provided."""
     with pytest.raises(ValueError, match="At least one time frame"):
         LimitSpec(requests=5, seconds=0, minutes=0, hours=0)
 
 
-def test_default_key_usage(limiter):
+def test_default_key_usage(limiter) -> None:
     """Test the usage of default_key when unique_key is not provided."""
     limiter.is_incoming = False
     limiter.default_key = "default_test_key"
@@ -503,11 +501,9 @@ def test_default_key_usage(limiter):
     def limited_function():
         return "success"
 
-    # Ограничение должно работать с default_key
     for _ in range(5):
         assert limited_function() == "success"
 
-    # Превышение лимита вызывает задержку
     start_time = time.time()
     limited_function()
     elapsed_time = time.time() - start_time
@@ -515,7 +511,7 @@ def test_default_key_usage(limiter):
     assert elapsed_time >= 0.9, "Wait time not applied with default_key"
 
 
-def test_override_default_key(limiter):
+def test_override_default_key(limiter) -> None:
     """Test overriding default_key with unique_key."""
     limiter.is_incoming = False
     limiter.default_key = "default_test_key"
@@ -526,11 +522,9 @@ def test_override_default_key(limiter):
     def limited_function():
         return "success"
 
-    # Ограничение должно работать с unique_key
     for _ in range(3):
         assert limited_function() == "success"
 
-    # Превышение лимита вызывает задержку
     start_time = time.time()
     limited_function()
     elapsed_time = time.time() - start_time
@@ -538,7 +532,7 @@ def test_override_default_key(limiter):
     assert elapsed_time >= 1.9, "Wait time not applied with custom unique_key"
 
 
-def test_priority_unique_key_over_default_key(limiter):
+def test_priority_unique_key_over_default_key(limiter) -> None:
     """Test that unique_key takes precedence over default_key."""
     limiter.is_incoming = False
     limiter.default_key = "default_test_key"
@@ -559,7 +553,7 @@ def test_priority_unique_key_over_default_key(limiter):
     assert elapsed_time >= 0.9, "Wait time not applied with unique_key"
 
 
-def test_priority_default_key_over_ip(limiter):
+def test_priority_default_key_over_ip(limiter) -> None:
     """Test that default_key takes precedence over ip from kwargs."""
     limiter.is_incoming = False
     limiter.default_key = "default_test_key"
@@ -578,7 +572,7 @@ def test_priority_default_key_over_ip(limiter):
     assert elapsed_time >= 0.9, "Wait time not applied with default_key"
 
 
-def test_ip_key_as_fallback(limiter):
+def test_ip_key_as_fallback(limiter) -> None:
     """Test that ip from kwargs is used if no other keys are provided."""
     limiter.is_incoming = False
     limiter.default_key = None
@@ -597,7 +591,7 @@ def test_ip_key_as_fallback(limiter):
     assert elapsed_time >= 0.9, "Wait time not applied with ip key"
 
 
-def test_call_decorator_no_limit_spec_or_default_limit():
+def test_call_decorator_no_limit_spec_or_default_limit() -> None:
     """Test decorator raises ValueError if no limit_spec or default_limit."""
     limiter = RatelimitIO(backend=Redis(decode_responses=True))
     with pytest.raises(
@@ -609,7 +603,7 @@ def test_call_decorator_no_limit_spec_or_default_limit():
             pass
 
 
-def test_override_is_incoming_false_sync(limiter):
+def test_override_is_incoming_false_sync(limiter) -> None:
     """Test overriding is_incoming=False for sync decorators."""
     limiter.is_incoming = False
 
@@ -628,7 +622,7 @@ def test_override_is_incoming_false_sync(limiter):
 
 
 @pytest.mark.asyncio
-async def test_override_is_incoming_false_async(async_limiter):
+async def test_override_is_incoming_false_async(async_limiter) -> None:
     """Test overriding is_incoming=False for async decorators."""
     async_limiter.is_incoming = False
 
@@ -646,14 +640,19 @@ async def test_override_is_incoming_false_async(async_limiter):
     assert elapsed_time >= 0.9, "Wait time not applied for outgoing requests"
 
 
-def test_ratelimit_exceeded_error():
+def test_ratelimit_exceeded_error() -> None:
+    """Test the RatelimitExceededError exception properties."""
     error = RatelimitExceededError()
     assert error.detail == "Too many requests"
     assert error.status_code == 429
 
 
 @pytest.mark.asyncio
-async def test_async_wrapper_ratelimit_exceeded(async_limiter):
+async def test_async_wrapper_ratelimit_exceeded(async_limiter) -> None:
+    """
+    Test that the async decorator raises an error when rate limit is exceeded.
+    """
+
     @async_limiter(limit_spec=LimitSpec(1, seconds=1))
     async def limited_function():
         return "success"
@@ -663,7 +662,11 @@ async def test_async_wrapper_ratelimit_exceeded(async_limiter):
         await limited_function()
 
 
-def test_wait_ratelimit_exceeded(limiter):
+def test_wait_ratelimit_exceeded(limiter) -> None:
+    """
+    Test that the sync `wait` method raises an error
+        when rate limit is exceeded.
+    """
     limiter.wait(
         key="test_key", limit_spec=LimitSpec(1, seconds=1), max_wait_time=0.1
     )
@@ -677,7 +680,11 @@ def test_wait_ratelimit_exceeded(limiter):
 
 
 @pytest.mark.asyncio
-async def test_a_wait_ratelimit_exceeded(async_limiter):
+async def test_a_wait_ratelimit_exceeded(async_limiter) -> None:
+    """
+    Test that the async `a_wait` method raises
+        an error when rate limit is exceeded.
+    """
     await async_limiter.a_wait(
         key="test_key", limit_spec=LimitSpec(1, seconds=1), max_wait_time=0.1
     )
@@ -690,7 +697,13 @@ async def test_a_wait_ratelimit_exceeded(async_limiter):
         )
 
 
-def test_enforce_limit_sync_script_load_error(limiter, real_redis_client):
+def test_enforce_limit_sync_script_load_error(
+    limiter, real_redis_client
+) -> None:
+    """
+    Test that the sync `_enforce_limit_sync`
+        raises ScriptLoadError if the script fails to load.
+    """
     real_redis_client.script_flush()
 
     limiter.backend = real_redis_client
@@ -703,7 +716,11 @@ def test_enforce_limit_sync_script_load_error(limiter, real_redis_client):
 @pytest.mark.asyncio
 async def test_enforce_limit_async_script_load_error(
     async_limiter, real_async_redis_client
-):
+) -> None:
+    """
+    Test that the async `_enforce_limit_async`
+        raises ScriptLoadError if the script fails to load.
+    """
     await real_async_redis_client.script_flush()
 
     async_limiter.backend = real_async_redis_client
@@ -715,7 +732,11 @@ async def test_enforce_limit_async_script_load_error(
         )
 
 
-def test_missing_limit_spec_or_default_limit():
+def test_missing_limit_spec_or_default_limit() -> None:
+    """
+    Test that `wait` raises ValueError
+        when neither limit_spec nor default_limit is provided.
+    """
     limiter = RatelimitIO(backend=Redis(decode_responses=True))
     with pytest.raises(
         ValueError, match="limit_spec or self.default_limit must be provided"
@@ -723,7 +744,11 @@ def test_missing_limit_spec_or_default_limit():
         limiter.wait(key="test_key", limit_spec=None)
 
 
-def test_sync_wrapper_decorator(limiter):
+def test_sync_wrapper_decorator(limiter) -> None:
+    """
+    Test the sync decorator wrapper applies rate limiting correctly.
+    """
+
     @limiter(
         limit_spec=LimitSpec(requests=5, seconds=1),
         unique_key="sync_wrapper_test",
@@ -736,7 +761,10 @@ def test_sync_wrapper_decorator(limiter):
 
 
 @pytest.mark.asyncio
-async def test_async_wait_branch(async_limiter):
+async def test_async_wait_branch(async_limiter) -> None:
+    """
+    Test the async `a_wait` method handles rate limit enforcement correctly.
+    """
     await async_limiter.a_wait(
         key="test_key", limit_spec=LimitSpec(1, seconds=1), max_wait_time=0.1
     )
@@ -748,7 +776,11 @@ async def test_async_wait_branch(async_limiter):
         )
 
 
-def test_ensure_script_loaded_sync_error(limiter, real_redis_client):
+def test_ensure_script_loaded_sync_error(limiter, real_redis_client) -> None:
+    """
+    Test that `_ensure_script_loaded_sync`
+        raises ScriptLoadError if the script fails to load.
+    """
     real_redis_client.script_flush()
     limiter.backend = real_redis_client
     with pytest.raises(ScriptLoadError), patch(
@@ -756,3 +788,52 @@ def test_ensure_script_loaded_sync_error(limiter, real_redis_client):
         side_effect=Exception("mock error"),
     ):
         limiter._ensure_script_loaded_sync()
+
+
+@pytest.mark.asyncio
+async def test_async_context_manager_lua_script_loading(
+    real_async_redis_client,
+) -> None:
+    """
+    Test that Lua script is loaded correctly when using the async context manager.
+    """
+    async with RatelimitIO(backend=real_async_redis_client) as limiter:
+        script_exists = await real_async_redis_client.script_exists(
+            limiter._lua_script_hash
+        )
+        assert script_exists[0], "Lua script was not loaded in context manager"
+
+        await limiter.a_wait("test_key", LimitSpec(1, seconds=1))
+
+
+@pytest.mark.asyncio
+async def test_async_context_manager_no_errors_on_exit(
+    real_async_redis_client,
+) -> None:
+    """
+    Test that the async context manager exits gracefully without errors.
+    """
+    async with RatelimitIO(backend=real_async_redis_client) as limiter:
+        await limiter.a_wait("test_key", LimitSpec(1, seconds=1))
+
+    assert True, "Async context manager raised an unexpected exception on exit"
+
+
+@pytest.mark.asyncio
+async def test_async_context_manager_reuse() -> None:
+    """
+    Test reusing the same RatelimitIO instance in different contexts.
+    """
+    redis_client = AsyncRedis(
+        host="localhost", port=6379, decode_responses=True
+    )
+    limiter = RatelimitIO(backend=redis_client)
+
+    async with limiter:
+        await limiter.a_wait("test_key_1", LimitSpec(1, seconds=1))
+
+    async with limiter:
+        await limiter.a_wait("test_key_2", LimitSpec(1, seconds=1))
+
+    assert redis_client.ping(), "Redis connection was closed unexpectedly"
+    await redis_client.aclose()  # type: ignore[attr-defined]
