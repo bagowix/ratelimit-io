@@ -1,13 +1,15 @@
 # RatelimitIO
 
-A Python library for rate limiting, designed to handle both incoming and outgoing requests efficiently. Supports both synchronous and asynchronous paradigms. Powered by Redis, this library provides decorators, context managers, and easy integration with APIs to manage request limits with precision.
+A Python library for rate limiting, designed to handle both incoming and outgoing requests efficiently. Supports both synchronous and asynchronous paradigms. Powered by Redis, this library provides decorators and easy integration with APIs to manage request limits with precision.
 
 #### Project Information
 [![Tests & Lint](https://github.com/bagowix/ratelimit-io/actions/workflows/actions.yml/badge.svg)](https://github.com/bagowix/ratelimit-io/actions/workflows/actions.yml)
+[![image](https://img.shields.io/pypi/v/ratelimit-io/0.5.0.svg)](https://pypi.python.org/pypi/ratelimit-io)
 [![Test Coverage](https://img.shields.io/badge/dynamic/json?color=blueviolet&label=coverage&query=%24.totals.percent_covered_display&suffix=%25&url=https%3A%2F%2Fraw.githubusercontent.com%2Fbagowix%2Fratelimit-io%2Fmain%2Fcoverage.json)](https://github.com/bagowix/ratelimit-io/blob/main/coverage.json)
 [![PyPI - Python Version](https://img.shields.io/pypi/pyversions/ratelimit-io)](https://pypi.org/project/ratelimit-io/)
 [![License](https://img.shields.io/pypi/l/ratelimit-io)](LICENSE)
-[![PyPI Downloads](https://img.shields.io/pypi/dm/ratelimit-io)](https://pypi.org/project/ratelimit-io/)
+[![Downloads](https://pepy.tech/badge/ratelimit-io)](https://pepy.tech/project/ratelimit-io)
+[![Formatter](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
 
 ---
 
@@ -18,7 +20,6 @@ A Python library for rate limiting, designed to handle both incoming and outgoin
 - **Redis Backend**: Leverages Redis for fast and scalable rate limiting.
 - **Flexible API**:
   - Use as a **decorator** for methods or functions.
-  - Use as a **context manager** for precise control over request flows.
   - Integrate directly into API clients, middlewares, or custom request handlers.
 - **Customizable Rate Limits**: Specify limits per key, time period, and requests.
 - **Robust Lua Script**: Ensures efficient and atomic rate limiting logic for high-concurrency use cases.
@@ -106,31 +107,6 @@ def fetch_data_outgoing():
     return "Request succeeded!"
 ```
 
-### Using as a Synchronous Context Manager
-
-```python
-from ratelimit_io import RatelimitIO, LimitSpec
-from redis import Redis
-
-redis_client = Redis(host="localhost", port=6379)
-limiter = RatelimitIO(backend=redis_client)
-
-with limiter:
-    limiter.wait("user:456", LimitSpec(requests=5, seconds=10))
-```
-
-### Using as a Asynchronous Context Manager
-
-```python
-from ratelimit_io import RatelimitIO, LimitSpec
-from redis.asyncio import Redis as AsyncRedis
-
-async_redis_client = AsyncRedis(host="localhost", port=6379)
-async_limiter = RatelimitIO(backend=async_redis_client)
-
-async with async_limiter:
-    await async_limiter.a_wait("user:456", LimitSpec(requests=5, seconds=10))
-```
 ## Dynamic `is_incoming` Detection
 
 Automatically determines request type (incoming or outgoing) based on the context. Incoming requests (default) raise `RatelimitIOError` if limits are exceeded, while outgoing requests wait for a slot.
@@ -149,7 +125,6 @@ for _ in range(5):
 # Raises RatelimitIOError after 5 requests
 incoming_request()
 
-# -------------------------------------------------------------------------------------------------------
 
 # Outgoing request handling
 limiter.is_incoming = False

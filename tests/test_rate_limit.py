@@ -3,15 +3,17 @@ import re
 import time
 from typing import AsyncGenerator
 from typing import Generator
+from unittest.mock import patch
 
 import pytest
-import redis
 from redis import Redis
 from redis.asyncio import Redis as AsyncRedis
 
 from ratelimit_io import LimitSpec
+from ratelimit_io import RatelimitExceededError
 from ratelimit_io import RatelimitIO
 from ratelimit_io import RatelimitIOError
+from ratelimit_io import ScriptLoadError
 
 
 @pytest.fixture(scope="function")
@@ -82,7 +84,7 @@ def test_sync_limit_incoming(limiter):
     for _ in range(5):
         limiter.wait(key, LimitSpec(requests=5, seconds=1))
 
-    with pytest.raises(RatelimitIOError, match="Too many Requests"):
+    with pytest.raises(RatelimitExceededError, match="Too many requests"):
         limiter.wait(key, LimitSpec(requests=5, seconds=1))
 
 
@@ -95,7 +97,7 @@ async def test_async_limit_incoming(async_limiter):
     for _ in range(5):
         await async_limiter.a_wait(key, LimitSpec(requests=5, seconds=1))
 
-    with pytest.raises(RatelimitIOError, match="Too many Requests"):
+    with pytest.raises(RatelimitIOError, match="Too many requests"):
         await async_limiter.a_wait(key, LimitSpec(requests=5, seconds=1))
 
 
@@ -113,7 +115,7 @@ async def test_async_decorator_incoming(async_limiter):
     for _ in range(5):
         assert await limited_function() == "success"
 
-    with pytest.raises(RatelimitIOError, match="Too many Requests"):
+    with pytest.raises(RatelimitExceededError, match="Too many requests"):
         await limited_function()
 
 
@@ -121,14 +123,16 @@ def test_sync_decorator_incoming(limiter):
     """Test synchronous decorator usage with is_incoming=True."""
     limiter.is_incoming = True
 
-    @limiter(LimitSpec(requests=5, seconds=1), unique_key="sync_test_key")
+    @limiter(
+        limit_spec=LimitSpec(requests=5, seconds=1), unique_key="sync_test_key"
+    )
     def limited_function():
         return "success"
 
     for _ in range(5):
         assert limited_function() == "success"
 
-    with pytest.raises(RatelimitIOError, match="Too many Requests"):
+    with pytest.raises(RatelimitIOError, match="Too many requests"):
         limited_function()
 
 
@@ -175,7 +179,7 @@ def test_default_key_incoming_behavior(limiter):
     for _ in range(5):
         assert limited_function() == "success"
 
-    with pytest.raises(RatelimitIOError, match="Too many Requests"):
+    with pytest.raises(RatelimitIOError, match="Too many requests"):
         limited_function()
 
 
@@ -192,7 +196,7 @@ async def test_default_key_incoming_behavior_async(async_limiter):
     for _ in range(5):
         assert await limited_function() == "success"
 
-    with pytest.raises(RatelimitIOError, match="Too many Requests"):
+    with pytest.raises(RatelimitIOError, match="Too many requests"):
         await limited_function()
 
 
@@ -237,21 +241,6 @@ async def test_async_decorator_without_args(async_limiter):
     assert elapsed_time >= 0.9, "Wait time not applied with default_key"
 
 
-@pytest.mark.asyncio
-async def test_async_context_manager(async_limiter):
-    """Test asynchronous context manager."""
-    async with async_limiter:
-        await async_limiter.a_wait(
-            "context_test", LimitSpec(requests=5, seconds=1)
-        )
-
-
-def test_sync_context_manager(limiter):
-    """Test synchronous context manager."""
-    with limiter:
-        limiter.wait("context_test", LimitSpec(requests=5, seconds=1))
-
-
 def test_missing_key_and_limit_spec(real_redis_client):
     """Test missing key and limit_spec for `wait`."""
     limiter = RatelimitIO(
@@ -269,7 +258,7 @@ async def test_redis_connection_error():
     invalid_client = AsyncRedis(host="localhost", port=12345)
     limiter = RatelimitIO(backend=invalid_client)
 
-    with pytest.raises(redis.exceptions.ConnectionError):
+    with pytest.raises(ScriptLoadError):
         await limiter.a_wait("unreachable", LimitSpec(5, seconds=1))
 
 
@@ -655,3 +644,115 @@ async def test_override_is_incoming_false_async(async_limiter):
     elapsed_time = time.time() - start_time
 
     assert elapsed_time >= 0.9, "Wait time not applied for outgoing requests"
+
+
+def test_ratelimit_exceeded_error():
+    error = RatelimitExceededError()
+    assert error.detail == "Too many requests"
+    assert error.status_code == 429
+
+
+@pytest.mark.asyncio
+async def test_async_wrapper_ratelimit_exceeded(async_limiter):
+    @async_limiter(limit_spec=LimitSpec(1, seconds=1))
+    async def limited_function():
+        return "success"
+
+    await limited_function()
+    with pytest.raises(RatelimitIOError):
+        await limited_function()
+
+
+def test_wait_ratelimit_exceeded(limiter):
+    limiter.wait(
+        key="test_key", limit_spec=LimitSpec(1, seconds=1), max_wait_time=0.1
+    )
+
+    with pytest.raises(RatelimitExceededError):
+        limiter.wait(
+            key="test_key",
+            limit_spec=LimitSpec(1, seconds=1),
+            max_wait_time=0.1,
+        )
+
+
+@pytest.mark.asyncio
+async def test_a_wait_ratelimit_exceeded(async_limiter):
+    await async_limiter.a_wait(
+        key="test_key", limit_spec=LimitSpec(1, seconds=1), max_wait_time=0.1
+    )
+
+    with pytest.raises(RatelimitExceededError):
+        await async_limiter.a_wait(
+            key="test_key",
+            limit_spec=LimitSpec(1, seconds=1),
+            max_wait_time=0.1,
+        )
+
+
+def test_enforce_limit_sync_script_load_error(limiter, real_redis_client):
+    real_redis_client.script_flush()
+
+    limiter.backend = real_redis_client
+    with pytest.raises(ScriptLoadError), patch(
+        "ratelimit_io.rate_limit.RatelimitIO._ensure_script_loaded_sync"
+    ):
+        limiter._enforce_limit_sync("test_key", LimitSpec(1, seconds=1))
+
+
+@pytest.mark.asyncio
+async def test_enforce_limit_async_script_load_error(
+    async_limiter, real_async_redis_client
+):
+    await real_async_redis_client.script_flush()
+
+    async_limiter.backend = real_async_redis_client
+    with pytest.raises(ScriptLoadError), patch(
+        "ratelimit_io.rate_limit.RatelimitIO._ensure_script_loaded_async"
+    ):
+        await async_limiter._enforce_limit_async(
+            "test_key", LimitSpec(1, seconds=1)
+        )
+
+
+def test_missing_limit_spec_or_default_limit():
+    limiter = RatelimitIO(backend=Redis(decode_responses=True))
+    with pytest.raises(
+        ValueError, match="limit_spec or self.default_limit must be provided"
+    ):
+        limiter.wait(key="test_key", limit_spec=None)
+
+
+def test_sync_wrapper_decorator(limiter):
+    @limiter(
+        limit_spec=LimitSpec(requests=5, seconds=1),
+        unique_key="sync_wrapper_test",
+    )
+    def limited_function():
+        return "success"
+
+    for _ in range(5):
+        assert limited_function() == "success"
+
+
+@pytest.mark.asyncio
+async def test_async_wait_branch(async_limiter):
+    await async_limiter.a_wait(
+        key="test_key", limit_spec=LimitSpec(1, seconds=1), max_wait_time=0.1
+    )
+    with pytest.raises(RatelimitExceededError):
+        await async_limiter.a_wait(
+            key="test_key",
+            limit_spec=LimitSpec(1, seconds=1),
+            max_wait_time=0.1,
+        )
+
+
+def test_ensure_script_loaded_sync_error(limiter, real_redis_client):
+    real_redis_client.script_flush()
+    limiter.backend = real_redis_client
+    with pytest.raises(ScriptLoadError), patch(
+        "redis.commands.core.ScriptCommands.script_load",
+        side_effect=Exception("mock error"),
+    ):
+        limiter._ensure_script_loaded_sync()
