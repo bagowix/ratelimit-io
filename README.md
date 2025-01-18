@@ -4,7 +4,7 @@ A Python library for rate limiting, designed to handle both incoming and outgoin
 
 #### Project Information
 [![Tests & Lint](https://github.com/bagowix/ratelimit-io/actions/workflows/actions.yml/badge.svg)](https://github.com/bagowix/ratelimit-io/actions/workflows/actions.yml)
-[![image](https://img.shields.io/pypi/v/ratelimit-io/0.6.2.svg)](https://pypi.python.org/pypi/ratelimit-io)
+[![image](https://img.shields.io/pypi/v/ratelimit-io/0.6.3.svg)](https://pypi.python.org/pypi/ratelimit-io)
 [![Test Coverage](https://img.shields.io/badge/dynamic/json?color=blueviolet&label=coverage&query=%24.totals.percent_covered_display&suffix=%25&url=https%3A%2F%2Fraw.githubusercontent.com%2Fbagowix%2Fratelimit-io%2Fmain%2Fcoverage.json)](https://github.com/bagowix/ratelimit-io/blob/main/coverage.json)
 [![PyPI - Python Version](https://img.shields.io/pypi/pyversions/ratelimit-io)](https://pypi.org/project/ratelimit-io/)
 [![License](https://img.shields.io/pypi/l/ratelimit-io)](LICENSE)
@@ -15,17 +15,25 @@ A Python library for rate limiting, designed to handle both incoming and outgoin
 
 ## Features
 
-- **Incoming and Outgoing Support**: Effectively handles limits for both inbound (e.g., API requests) and outbound (e.g., client requests to external APIs) traffic.
-- **Synchronous and Asynchronous Support**: Works seamlessly in both paradigms.
-- **Redis Backend**: Leverages Redis for fast and scalable rate limiting.
-- **Flexible API**:
-  - Use as a **decorator** for methods or functions.
-  - Integrate directly into API clients, middlewares, or custom request handlers.
-- **Customizable Rate Limits**: Specify limits per key, time period, and requests.
-- **Robust Lua Script**: Ensures efficient and atomic rate limiting logic for high-concurrency use cases.
-- **Automatic Error Handling**: Easily manage 429 Too Many Requests errors in popular frameworks like Flask, Django, and FastAPI.
-- **Support for Incoming Request Behavior**: Use the `is_incoming` flag to distinguish between incoming requests (throwing errors immediately) and outgoing requests (waiting for available slots).
-- **Ease of Use**: Simple and intuitive integration into Python applications.
+- **Incoming and Outgoing Request Management**:
+  - Handle inbound limits (e.g., API requests) with immediate error raising.
+  - Manage outbound limits (e.g., client requests to external APIs) with intelligent waiting.
+- **Synchronous and Asynchronous Support**:
+  - Seamlessly integrate with both blocking and async applications.
+- **Asynchronous Context Manager**:
+  - Use `async with` for automatic Lua script loading and resource management.
+- **Customizable Rate Limits**:
+  - Define limits by requests, time periods, or custom keys.
+- **Redis Backend**:
+  - Leverages Redis for fast and scalable rate limiting.
+- **Decorators**:
+  - Apply rate limits easily to functions or methods.
+- **Automatic Error Handling**:
+  - Easily manage 429 Too Many Requests errors in popular frameworks like Flask, Django, and FastAPI.
+- **Granular Key Management**:
+  - Priority-based key resolution for efficient bucket management.
+- **Ease of Use**:
+  - Simple and intuitive integration into Python applications.
 
 ---
 
@@ -85,6 +93,28 @@ async def fetch_data():
 await fetch_data()
 ```
 
+### Asynchronous Context Manager
+
+Simplify usage with the asynchronous context manager:
+
+```python
+from ratelimit_io import RatelimitIO, LimitSpec
+from redis.asyncio import Redis as AsyncRedis
+
+async def main():
+    redis_client = AsyncRedis(host="localhost", port=6379)
+
+    async with RatelimitIO(
+        backend=redis_client,
+        default_limit=LimitSpec(requests=5, seconds=10),
+    ) as limiter:
+        # Lua script is automatically loaded here
+        await limiter.a_wait("test_key")
+        print("Request processed within limit!")
+
+# The Redis connection remains open after exiting the context
+```
+
 ### Incoming vs. Outgoing Request Handling (`is_incoming`)
 
 - The `default_key` or a dynamically generated key (e.g., based on `unique_key` or `kwargs["ip"]`) determines the rate limit bucket.
@@ -136,7 +166,7 @@ for _ in range(5):
 limiter.wait("outgoing_request", LimitSpec(requests=5, seconds=1))
 ```
 
-## Error Handling for 429 Responses
+## Error Handling for 429 Responses in Frameworks
 
 ### FastAPI Example
 

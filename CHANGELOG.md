@@ -4,6 +4,15 @@ We follow [Semantic Versions](https://semver.org/).
 
 ## WIP
 
+## WIP
+
+## Version 0.6.3
+
+### Misc
+
+- Updated README with examples for:
+  - Using context managers for async workflows.
+
 ## Version 0.6.2
 
 ### Features
