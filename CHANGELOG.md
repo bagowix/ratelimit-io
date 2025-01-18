@@ -4,6 +4,12 @@ We follow [Semantic Versions](https://semver.org/).
 
 ## WIP
 
+## Version 0.6.1
+
+### Misc
+
+- Update version in pyproject.toml, README.md
+
 ## Version 0.6.0
 
 ### Features
