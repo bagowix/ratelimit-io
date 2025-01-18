@@ -1,4 +1,4 @@
-# RatelimitIO
+# Ratelimit-IO
 
 A Python library for rate limiting, designed to handle both incoming and outgoing requests efficiently. Supports both synchronous and asynchronous paradigms. Powered by Redis, this library provides decorators and easy integration with APIs to manage request limits with precision.
 
