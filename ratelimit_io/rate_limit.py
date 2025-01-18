@@ -1,3 +1,4 @@
+import logging
 import time
 from functools import wraps
 from typing import Callable
@@ -10,30 +11,67 @@ from redis import Redis
 from redis.asyncio import Redis as AsyncRedis
 from redis.exceptions import NoScriptError
 
+logger = logging.getLogger(__name__)
+
 
 class RatelimitIOError(Exception):
-    """Raised when the rate limit is exceeded."""
+    """Base class for all rate limit errors."""
 
     def __init__(
         self,
         detail: Optional[str] = "Too many Requests",
         status_code: Optional[int] = 429,
     ) -> None:
+        """
+        Initializes the RatelimitIOError instance.
+
+        Args:
+            detail (Optional[str]): Error detail message.
+            status_code (Optional[int]): HTTP status code.
+        """
         super().__init__(detail)
         self.status_code = status_code
         self.detail = detail
 
 
-class LimitSpec:
-    """
-    Specifies the number of requests allowed in a time frame.
+class RatelimitExceededError(RatelimitIOError):
+    """Raised when the rate limit is exceeded."""
 
-    Attributes:
-        requests (int): Maximum number of requests.
-        seconds (Optional[int]): Time frame in seconds.
-        minutes (Optional[int]): Time frame in minutes.
-        hours (Optional[int]): Time frame in hours.
-    """
+    def __init__(
+        self,
+        detail: Optional[str] = "Too many requests",
+        status_code: Optional[int] = 429,
+    ) -> None:
+        """
+        Initializes the RatelimitExceededError instance.
+
+        Args:
+            detail (Optional[str]): Error detail message.
+            status_code (Optional[int]): HTTP status code.
+        """
+        super().__init__(detail, status_code)
+
+
+class ScriptLoadError(RatelimitIOError):
+    """Raised when the Lua script fails to load into Redis."""
+
+    def __init__(
+        self,
+        detail: Optional[str] = "Failed to load Lua script into Redis.",
+        status_code: Optional[int] = 500,
+    ) -> None:
+        """
+        Initializes the ScriptLoadError instance.
+
+        Args:
+            detail (Optional[str]): Error detail message.
+            status_code (Optional[int]): HTTP status code.
+        """
+        super().__init__(detail, status_code)
+
+
+class LimitSpec:
+    """Specifies the number of requests allowed in a time frame."""
 
     def __init__(
         self,
@@ -42,6 +80,18 @@ class LimitSpec:
         minutes: Optional[int] = None,
         hours: Optional[int] = None,
     ) -> None:
+        """
+        Initializes the LimitSpec instance.
+
+        Args:
+            requests (int): Maximum number of requests.
+            seconds (Optional[int]): Time frame in seconds.
+            minutes (Optional[int]): Time frame in minutes.
+            hours (Optional[int]): Time frame in hours.
+
+        Raises:
+            ValueError: If requests <= 0 or no time frame is provided.
+        """
         if requests <= 0:
             raise ValueError("Requests must be greater than 0.")
 
@@ -73,6 +123,12 @@ class LimitSpec:
         return total
 
     def __str__(self) -> str:
+        """
+        Returns a string representation of the limit specification.
+
+        Returns:
+            str: String representation of the limit specification.
+        """
         return f"{self.requests}/{self.total_seconds()}s"
 
 
@@ -99,6 +155,9 @@ class RatelimitIO:
             default_limit (Optional[LimitSpec]): Default rate
                 limit for the base URL.
             default_key (Optional[str]): Default unique key for rate limiting.
+
+        Raises:
+            RuntimeError: If the backend is not a supported Redis instance.
         """
         if not isinstance(backend, (Redis, AsyncRedis)):
             raise RuntimeError("Unsupported Redis backend.")
@@ -145,6 +204,9 @@ class RatelimitIO:
 
         Returns:
             Callable: Decorated function.
+
+        Raises:
+            ValueError: If no rate limit specification is provided.
         """
         limit_spec = limit_spec or self.default_limit
         if not limit_spec:
@@ -155,7 +217,9 @@ class RatelimitIO:
 
         inferred_incoming = func is not None and callable(func)
 
-        def decorator(func: Callable) -> Callable:
+        def decorator(
+            func: Callable,
+        ) -> Callable:
             @wraps(func)
             async def async_wrapper(*args, **kwargs):
                 key = self._prepare_key(
@@ -204,24 +268,6 @@ class RatelimitIO:
 
         return decorator(func) if func and callable(func) else decorator
 
-    def __enter__(self) -> "RatelimitIO":
-        """Synchronous context manager."""
-        self._ensure_script_loaded_sync()
-        return self
-
-    def __exit__(self, exc_type, exc_value, traceback) -> None:
-        """No cleanup is necessary for this context manager."""
-        pass
-
-    async def __aenter__(self) -> "RatelimitIO":
-        """Context manager for async operations."""
-        await self._ensure_script_loaded_async()
-        return self
-
-    async def __aexit__(self, exc_type, exc_value, traceback) -> None:
-        """No cleanup is necessary for this context manager."""
-        pass
-
     def wait(
         self,
         key: Optional[str] = None,
@@ -260,7 +306,7 @@ class RatelimitIO:
 
         if self.is_incoming:
             if not self._enforce_limit_sync(key, limit_spec):  # type: ignore
-                raise RatelimitIOError()
+                raise RatelimitExceededError()
             return
 
         start_time = time.time()
@@ -268,7 +314,7 @@ class RatelimitIO:
 
         while not self._enforce_limit_sync(key, limit_spec):  # type: ignore
             if time.time() - start_time > max_wait_time:
-                raise RatelimitIOError(
+                raise RatelimitExceededError(
                     f"Rate limit exceeded for {key}, wait time exceeded."
                 )
             time.sleep(backoff)
@@ -315,7 +361,7 @@ class RatelimitIO:
                 key,
                 limit_spec,  # type: ignore
             ):
-                raise RatelimitIOError()
+                raise RatelimitExceededError()
             return
 
         start_time = time.time()
@@ -326,7 +372,7 @@ class RatelimitIO:
             limit_spec,  # type: ignore
         ):
             if time.time() - start_time > max_wait_time:
-                raise RatelimitIOError(
+                raise RatelimitExceededError(
                     f"Rate limit exceeded for {key}, wait time exceeded."
                 )
             await asyncio.sleep(backoff)
@@ -363,13 +409,14 @@ class RatelimitIO:
             provided_key
             or unique_key
             or self.default_key
-            or kwargs.get("ip")
-            or "unknown_key"
+            or kwargs.get("ip", "unknown_key")
         )
 
         if func_name:
-            prefix = "async" if async_call else "sync"
-            key = f"ratelimit:{prefix}:{key}:{func_name}"
+            key = (
+                f"ratelimit"
+                f":{'async' if async_call else 'sync'}:{key}:{func_name}"
+            )
 
         return key
 
@@ -407,9 +454,7 @@ class RatelimitIO:
                     )
                 )
             except NoScriptError as exc:
-                raise RuntimeError(
-                    "Failed to load Lua script into Redis."
-                ) from exc
+                raise ScriptLoadError() from exc
 
     async def _enforce_limit_async(
         self, key: str, limit_spec: LimitSpec
@@ -447,10 +492,7 @@ class RatelimitIO:
                     )
                 )
             except NoScriptError as exc:
-                raise RuntimeError(
-                    f"Failed to load Lua script into "
-                    f"Redis for key '{key}'. Limit: {limit_spec}"
-                ) from exc
+                raise ScriptLoadError() from exc
 
     def _generate_key(self, identifier: str) -> str:
         """
@@ -466,14 +508,24 @@ class RatelimitIO:
 
     def _ensure_script_loaded_sync(self) -> None:
         """Ensures the Lua script is loaded into Redis (synchronously)."""
-        if not self.backend.script_exists(  # type: ignore
-            self._lua_script_hash
-        )[0]:
-            self.backend.script_load(self._lua_script)
-        self._script_loaded = True
+        try:
+            if not self.backend.script_exists(  # type: ignore
+                self._lua_script_hash
+            )[0]:
+                self.backend.script_load(self._lua_script)
+            self._script_loaded = True
+        except Exception as exc:
+            logger.error(f"Failed to load Lua script into Redis: {exc}")
+            raise ScriptLoadError() from exc
 
     async def _ensure_script_loaded_async(self) -> None:
         """Ensures the Lua script is loaded into Redis (asynchronously)."""
-        if not (await self.backend.script_exists(self._lua_script_hash))[0]:
-            await self.backend.script_load(self._lua_script)
-        self._script_loaded = True
+        try:
+            if not (await self.backend.script_exists(self._lua_script_hash))[
+                0
+            ]:
+                await self.backend.script_load(self._lua_script)
+            self._script_loaded = True
+        except Exception as exc:
+            logger.error(f"Failed to load Lua script into Redis: {exc}")
+            raise ScriptLoadError() from exc

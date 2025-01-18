@@ -4,6 +4,33 @@ We follow [Semantic Versions](https://semver.org/).
 
 ## WIP
 
+## Version 0.6.0
+
+### Features
+
+- Improved Error Handling:
+  - Introduced specific exception classes for better error categorization:
+    - `RatelimitIOError`: Base class for rate limit-related errors.
+    - `RatelimitExceededError`: Raised when the rate limit is exceeded.
+    - `ScriptLoadError`: Raised when the Lua script fails to load into Redis.
+  - Enhanced error messages for clarity and debugging.
+- Logging Support:
+  - Added logging for critical operations and errors:
+    - Logs errors when the Lua script fails to load into Redis.
+    - Logs exception details for debugging unexpected issues.
+
+### Misc
+
+- Code Simplification and Readability:
+  - Refactored exception handling for better readability and maintainability.
+  - Consolidated duplicated logic between synchronous and asynchronous methods.
+- Documentation and Examples:
+  - Updated inline comments and docstrings for clarity.
+  - Included examples of error handling and logging usage.
+- Testing Improvements:
+  - Increased test coverage for key generation, rate limit enforcement, and exception handling.
+  - Added edge case tests for `LimitSpec` and Redis Lua script loading.
+
 ## Version 0.5.0
 
 ### Features
