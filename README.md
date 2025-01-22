@@ -4,7 +4,7 @@ A Python library for rate limiting, designed to handle both incoming and outgoin
 
 #### Project Information
 [![Tests & Lint](https://github.com/bagowix/ratelimit-io/actions/workflows/actions.yml/badge.svg)](https://github.com/bagowix/ratelimit-io/actions/workflows/actions.yml)
-[![image](https://img.shields.io/pypi/v/ratelimit-io/0.6.3.svg)](https://pypi.python.org/pypi/ratelimit-io)
+[![image](https://img.shields.io/pypi/v/ratelimit-io/0.6.4.svg)](https://pypi.python.org/pypi/ratelimit-io)
 [![Test Coverage](https://img.shields.io/badge/dynamic/json?color=blueviolet&label=coverage&query=%24.totals.percent_covered_display&suffix=%25&url=https%3A%2F%2Fraw.githubusercontent.com%2Fbagowix%2Fratelimit-io%2Fmain%2Fcoverage.json)](https://github.com/bagowix/ratelimit-io/blob/main/coverage.json)
 [![PyPI - Python Version](https://img.shields.io/pypi/pyversions/ratelimit-io)](https://pypi.org/project/ratelimit-io/)
 [![License](https://img.shields.io/pypi/l/ratelimit-io)](LICENSE)
@@ -125,16 +125,23 @@ async def main():
 # Incoming request example (throws an error on limit breach)
 limiter = RatelimitIO(backend=redis_client, is_incoming=True)
 
-@limiter(LimitSpec(requests=5, seconds=10))
+@limiter(limit_spec=LimitSpec(requests=5, seconds=10))
 def fetch_data():
     return "Request succeeded!"
 
 # Outgoing request example (waits if limits are exceeded)
-outgoing_limiter = RatelimitIO(backend=redis_client)
+outgoing_limiter = RatelimitIO(
+    backend=redis_client,
+    default_key="https://api.example.com",
+    default_limit=LimitSpec(requests=5, seconds=10),
+)
 
-@outgoing_limiter(LimitSpec(requests=5, seconds=10))
+
 def fetch_data_outgoing():
-    return "Request succeeded!"
+    async with httpx.AsyncClient() as client:
+        await outgoing_limiter.a_wait("outgoing_request")
+        response = await client.get("https://api.example.com")
+        return response.json()
 ```
 
 ## Dynamic `is_incoming` Detection

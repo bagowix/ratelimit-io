@@ -4,7 +4,13 @@ We follow [Semantic Versions](https://semver.org/).
 
 ## WIP
 
-## WIP
+## Version 0.6.4
+
+### Misc
+
+- Updated README with examples for:
+  - Using outgoing request handling.
+- Updated pre-commit hooks versions
 
 ## Version 0.6.3
 
