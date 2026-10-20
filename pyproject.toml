@@ -1,6 +1,6 @@
 [build-system]
 # 1.30 is the first release that writes `import-names` (PEP 794); older ones drop it silently.
-requires = ["hatchling>=1.30"]
+requires = ["hatchling>=1.32.4"]
 build-backend = "hatchling.build"
 
 [project]
@@ -175,7 +175,7 @@ fail_under = 100
 [dependency-groups]
 dev = [
     "check-wheel-contents>=0.6.3",
-    "fakeredis[lua]>=2.20.0",
+    "fakeredis[lua]>=2.39.0",
     "griffe>=2.1.0",
     "hypothesis>=6.155.7",
     "mypy>=2.1.0",
