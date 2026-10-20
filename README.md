@@ -8,6 +8,7 @@
 [![Coverage](https://img.shields.io/badge/coverage-100%25-brightgreen.svg)](https://github.com/bagowix/ratelimit-io/actions/workflows/ci.yml)
 [![Documentation](https://img.shields.io/badge/docs-GitHub%20Pages-2f6f55.svg)](https://bagowix.github.io/ratelimit-io/)
 [![llms.txt](https://img.shields.io/badge/-llms.txt-brightgreen)](https://bagowix.github.io/ratelimit-io/llms.txt)
+[![Context7](https://img.shields.io/badge/docs-Context7-1f6feb.svg)](https://context7.com/bagowix/ratelimit-io)
 
 Distributed rate limiting for Python on Redis. Every process that shares a
 Redis server shares the limit: fixed window, sliding window or GCRA, each one
