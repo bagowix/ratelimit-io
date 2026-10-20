@@ -1,50 +1,77 @@
-exclude: ^coverage
+default_install_hook_types:
+  - pre-commit
+  - commit-msg
+
+default_stages: [pre-commit, pre-push]
+
 repos:
-    - repo: https://github.com/pre-commit/pre-commit-hooks
-      rev: v5.0.0
-      hooks:
-        - id: check-ast
-        - id: check-builtin-literals
-        - id: check-case-conflict
-        - id: check-docstring-first
-        - id: check-executables-have-shebangs
-        - id: check-json
-        - id: check-merge-conflict
-        - id: check-shebang-scripts-are-executable
-        - id: check-symlinks
-        - id: check-toml
-        - id: check-yaml
-        - id: check-xml
-        - id: debug-statements
-        - id: destroyed-symlinks
-        - id: fix-byte-order-marker
-        - id: mixed-line-ending
-        - id: trailing-whitespace
-        - id: end-of-file-fixer
-        - id: check-vcs-permalinks
-        - id: name-tests-test
-          args: [ --pytest-test-first ]
-        - id: pretty-format-json
-          args: [ --no-sort-keys ]
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.16.0
+    hooks:
+      - id: ruff-format
+      - id: ruff-check
+        name: ruff-check
 
-    - repo: https://github.com/python-poetry/poetry
-      rev: 1.8.5
-      hooks:
-        - id: poetry-check
-          name: poetry-check[sl-marketplace-gateway]
-          args: [ -C, app ]
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: check-docstring-first
+        exclude: ^ratelimit_io/version\.py$
+      - id: check-ast
+      - id: check-toml
+      - id: check-yaml
+      - id: check-merge-conflict
+      - id: check-case-conflict
+      - id: debug-statements
+      - id: end-of-file-fixer
+      - id: mixed-line-ending
+      - id: trailing-whitespace
+      - id: detect-private-key
+      - id: no-commit-to-branch
+        args: [ --branch, main ]
 
-    - repo: https://github.com/astral-sh/ruff-pre-commit
-      rev: v0.9.2
-      hooks:
-        - id: ruff
-          args: [ --fix, --exit-non-zero-on-fix ]
-        - id: ruff-format
+  - repo: local
+    hooks:
+      - id: mypy
+        name: mypy
+        entry: uv run mypy
+        language: system
+        types: [python]
+        pass_filenames: false
 
-    - repo: https://github.com/pre-commit/mirrors-mypy
-      rev: v1.14.1
-      hooks:
-        - id: mypy
-          additional_dependencies:
-            - "mypy-extensions>=1.0.0"
-            - "types-redis>=4.6.0.20241004"
+      - id: pyright
+        name: pyright
+        entry: uv run pyright
+        language: system
+        types: [python]
+        pass_filenames: false
+
+      - id: pyrefly
+        name: pyrefly
+        entry: uv run pyrefly check
+        language: system
+        types: [python]
+        pass_filenames: false
+
+      - id: zizmor
+        name: zizmor
+        entry: uv run zizmor .github/
+        language: system
+        files: ^\.github/(workflows/.*\.ya?ml|zizmor\.yml|dependabot\.yml)$
+        pass_filenames: false
+
+  - repo: https://github.com/jackdewinter/pymarkdown
+    rev: v0.9.38
+    hooks:
+      - id: pymarkdown
+        name: pymarkdown
+        files: \.md$
+        pass_filenames: true
+        exclude: (CHANGELOG\.md|^\.github/)
+
+  - repo: https://github.com/compilerla/conventional-pre-commit
+    rev: v4.4.0
+    hooks:
+      - id: conventional-pre-commit
+        stages: [commit-msg]
+        args: []
