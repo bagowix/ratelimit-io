@@ -1,216 +1,249 @@
-# Version history
+# Changelog
 
-We follow [Semantic Versions](https://semver.org/).
-
-## WIP
-
-## Version 0.6.5
-
-### Misc
-
-- Updated README with examples for:
-  - Using outgoing request handling.
-
-## Version 0.6.4
-
-### Misc
-
-- Updated README with examples for:
-  - Using outgoing request handling.
-- Updated pre-commit hooks versions
-
-## Version 0.6.3
-
-### Misc
-
-- Updated README with examples for:
-  - Using context managers for async workflows.
-
-## Version 0.6.2
-
-### Features
-
-- **Asynchronous Context Manager Support**:
-  - Added `__aenter__` and `__aexit__` methods to `RatelimitIO` for use as an asynchronous context manager.
-  - Ensures Lua scripts are automatically loaded into Redis when entering the context.
-  - Simplifies resource management and integration in async frameworks like FastAPI and aiohttp.
-
-## Version 0.6.1
-
-### Misc
-
-- Update version in pyproject.toml, README.md
-
-## Version 0.6.0
-
-### Features
-
-- Improved Error Handling:
-  - Introduced specific exception classes for better error categorization:
-    - `RatelimitIOError`: Base class for rate limit-related errors.
-    - `RatelimitExceededError`: Raised when the rate limit is exceeded.
-    - `ScriptLoadError`: Raised when the Lua script fails to load into Redis.
-  - Enhanced error messages for clarity and debugging.
-- Logging Support:
-  - Added logging for critical operations and errors:
-    - Logs errors when the Lua script fails to load into Redis.
-    - Logs exception details for debugging unexpected issues.
-
-### Misc
-
-- Code Simplification and Readability:
-  - Refactored exception handling for better readability and maintainability.
-  - Consolidated duplicated logic between synchronous and asynchronous methods.
-- Documentation and Examples:
-  - Updated inline comments and docstrings for clarity.
-  - Included examples of error handling and logging usage.
-- Testing Improvements:
-  - Increased test coverage for key generation, rate limit enforcement, and exception handling.
-  - Added edge case tests for `LimitSpec` and Redis Lua script loading.
-
-## Version 0.5.0
-
-### Features
-
-- Dynamic `is_incoming` Detection:
-  - Added automatic inference for `is_incoming` in decorators based on usage context:
-    - Incoming requests (e.g., API handlers): Raise `RatelimitIOError` when limits are exceeded.
-    - Outgoing requests (e.g., client-side throttling): Wait until a slot is available.
-  - Default behavior is now `is_incoming=True`, suitable for most incoming request use cases.
-  - Explicit `is_incoming=False` can still be set during initialization for outgoing request handling.
-- Removed `base_url` parameter:
-  - Simplified the API by fully replacing `base_url` with `default_key`.
-  - Unified logic for key preparation and eliminated redundancy.
-- Updated `_prepare_key` logic:
-  - Adjusted key priority to: `provided_key > unique_key > default_key > kwargs["ip"] > "unknown_key"`.
-  - Added `async/sync` prefixes to keys for better differentiation in mixed environments.
-- Enhanced decorator functionality:
-  - Supports both synchronous and asynchronous functions.
-  - Automatically applies appropriate behavior for incoming or outgoing requests.
-
-### Fixes
-
-- Fixed issues with key generation for mixed environments:
-  - Resolved edge cases where default keys were incorrectly prioritized.
-  - Ensured robust handling of `kwargs["ip"]` when no `default_key` or `unique_key` is provided.
-
-### Misc
-
-- Updated README and examples:
-  - Added detailed explanation for `is_incoming` behavior and dynamic detection.
-  - Removed all references to `base_url` and clarified usage of `default_key`.
-  - Included examples for both incoming and outgoing request scenarios.
-- Improved error messages for missing rate limit specifications (`limit_spec` or `default_limit`).
-- Increased test coverage to ensure robust handling of edge cases in key generation, rate limiting, and decorator functionality.
+All notable changes to this project are documented here. The format is based on
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
+adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-### Misc
+## [1.0.0] - 2026-10-20
 
-- Validation in CI workflow to ensure PyPI builds and publishing only occur for release commits with version tags (e.g., `0.4.0`).
+1.0 is a rewrite with a new API; the
+[migration guide](https://bagowix.github.io/ratelimit-io/migration/) maps every
+0.x name and setting to its replacement.
 
-## [Unreleased]
+### Changed
 
-### Misc
-- Updated `CONTRIBUTING.md`:
-  - Added instructions for setting up `pre-commit` hooks.
-  - Clarified that `CHANGELOG.md` must be updated before committing.
-  - Removed redundant manual steps for `ruff` and `mypy`, as these are handled by `pre-commit`.
+- **One `RateLimiter` class with `acquire()` and `acquire_sync()`.** 0.x had
+  `RatelimitIO.wait()` and `a_wait()`. The limiter now follows the
+  `run`/`run_sync` pattern of pydantic-ai: `await acquire()` with a
+  `redis.asyncio.Redis` client, `acquire_sync()` with a `redis.Redis` one, and
+  a decorator for both. `LimitSpec` is now `Limit`, `RatelimitIOError` is
+  `RateLimitError`, `RatelimitExceededError` is `RateLimitExceededError`.
+- **`max_wait` replaces `is_incoming`, `max_wait_time` and the backoff
+  settings.** `max_wait=0`, the default, refuses at once; a budget in seconds
+  waits for a slot. One setting now says what two used to, and it can be
+  overridden per call and per decorated function.
+- **Python 3.11 or newer.** 3.8 to 3.10 are no longer supported; CI runs 3.11
+  to 3.15.
+- **Bucket names changed.** A bucket is now the key plus the algorithm, the
+  limit and a `key_prefix`, so counters kept by 0.x are not read after the
+  upgrade. They expire on their own within one period.
+- **Releases are built and published by GitHub Actions** through PyPI trusted
+  publishing, with PEP 740 attestations and no long-lived token. The toolchain
+  moved from Poetry to uv and hatchling.
 
-## Version 0.4.0
+### Added
 
-### Fixes
+- **A choice of algorithm.** `Algorithm.SLIDING_WINDOW` never lets more than N
+  requests into any period-long interval, which the fixed window cannot promise
+  around its boundary. `Algorithm.GCRA` is a token bucket in constant memory.
+  The fixed window stays the default.
+- **Waiting requests reserve their slot.** One script call counts the request
+  or, when the bucket is full, reserves the next free slot; the limiter then
+  sleeps once. Waiters are served in arrival order across processes and never
+  poll Redis or retry.
+- **`retry_after` on every refusal.** `RateLimitExceededError` carries the
+  `limit` that refused the request and the seconds until a request on that key
+  can pass. Rounded up, it fills an HTTP `Retry-After` header.
+- **Key functions.** The decorator's `key` can be a function that receives the
+  call's arguments by name, defaults included, however the caller passed them,
+  and returns the bucket key, e.g. `key=lambda user_id, **_: f'user:{user_id}'`.
+- **`key_prefix`**, so applications that share a Redis server keep their
+  buckets apart.
+- **Typing.** The package ships `py.typed`, passes mypy, pyright and pyrefly in
+  strict mode, and the decorator keeps the wrapped function's signature.
+- **Documentation site** at <https://bagowix.github.io/ratelimit-io/>, with
+  `llms.txt` for agents.
 
-- Updated `default_key` in `RatelimitIO.__init__` to default to `None` instead of `"unknown_key"`, ensuring `kwargs["ip"]` is used when `unique_key` and `default_key` are not provided.
-- Renamed `_prepare_key_and_limit` to `_prepare_key` for clarity.
-- Refactored `_prepare_key` to simplify logic and resolve inconsistencies in key generation.
-- Fixed key handling in `wait` and `a_wait` to correctly validate and apply rate limits.
-- Ensured proper rate-limiting behavior for async and sync decorators with function-specific keys.
-- Addressed issues causing `NoneType` errors when `limit_spec` was not provided in `wait` and `a_wait`.
+### Fixed
 
-### Misc
+- **Outgoing waits could not outlast a 10-second window.** 0.x polled Redis
+  every 10 to 100 ms and gave up after `max_wait_time`, 10 s by default, so a
+  limit with a longer window always failed in outgoing mode, and every waiter
+  kept hitting Redis meanwhile. The limiter now reserves the next slot and
+  sleeps until it, and fails at once when that slot comes after the budget.
+- **The decorator hid the rate limit error.** When the wait inside
+  `@limiter(...)` ran out, 0.x raised a bare `RuntimeError` with the cause
+  suppressed. The decorator now raises `RateLimitExceededError`.
+- **Functions with the same name shared a limit.** The decorator keyed buckets
+  by `__name__`, so `Users.get` and `Orders.get` counted together. Buckets now
+  use the module and qualified name.
+- **A positional `ip` argument disabled per-client limits.** 0.x read the key
+  from `kwargs['ip']` only; called as `handler('203.0.113.7')`, every client
+  fell into one shared `"unknown_key"` bucket. Keys are now named explicitly,
+  and a key function sees arguments by name however they were passed.
+- **Limits on one key collided.** `10/s` and `1000/h` on the same key counted
+  in one counter. Each limit now has its own bucket.
+- **A limiter-wide key was split per decorated function**, so a limiter meant
+  to guard one external API allowed the full limit to every function using it.
+- **Redis errors were reported as `ScriptLoadError`.** A refused connection
+  surfaced as a script problem with HTTP status 500. Redis errors now propagate
+  unchanged, and the script is reloaded transparently, even when a
+  `SCRIPT FLUSH` lands between the reload and the retry.
+- **Every call cost an extra round trip** to check that the script was loaded.
+- **Invalid limits were accepted.** A negative period made the counter expire
+  at once and disabled the limit; `requests=2.5` allowed three requests; a
+  fractional period failed inside Redis. `Limit` now validates eagerly, and
+  the limiter checks every key, limit and `max_wait` it is given.
+- **Waits used the wall clock**, so a clock adjustment could cut a wait short
+  or stretch it. The Redis server now works out each wait on its own clock,
+  and the limiter sleeps it out in one call to `time.sleep` or `asyncio.sleep`,
+  which run on the monotonic clock.
+- **`asyncio.iscoroutinefunction` is deprecated in Python 3.14**; the decorator
+  uses `inspect.iscoroutinefunction`.
+- **The README named the wrong default mode**: it called outgoing mode the
+  default, while 0.x defaulted to incoming.
 
-- Enhanced key generation with async/sync-specific prefixes to distinguish between function call types.
-- Updated `virtualenv` dependency from `20.28.1` to `20.29.0` via `poetry update`.
+### Removed
 
-## Version 0.3.1
+- `ScriptLoadError`: the limiter reloads its script itself.
+- `async with limiter`: there was nothing to set up or tear down.
+- `status_code` and `detail` on the errors: answer with `429` yourself.
+- `backoff_start` and `backoff_max`: waits are exact now.
+- The `ip` keyword argument convention and the `"unknown_key"` fallback bucket.
 
-### Fixes
+## [0.6.5] - 2025-01-22
 
-- Removed `TypeAlias` import from `typing_extensions` for better compatibility with Python 3.8 and 3.9, as `TypeAlias` is now part of `typing` in Python 3.10+.
-- Replaced the `RedisBackend` alias with a direct use of `Union[Redis, AsyncRedis]` in the `backend` parameter of the `__init__` method for backward compatibility.
+### Changed
 
-### Misc
+- README examples for outgoing request handling.
 
-- Updated README with improved examples for:
-  - **Using middleware for FastAPI**: Enhanced to include proper error handling with `JSONResponse` for 429 responses, providing more clarity and correctness.
-  - **Using middleware for Django**: Added a class-based middleware example leveraging `MiddlewareMixin` for better integration with Django's request/response lifecycle. Also demonstrated an example with DRF's `APIView`.
+## [0.6.4] - 2025-01-22
 
-## Version 0.3.0
+### Changed
 
-### Features
+- README examples for outgoing request handling.
+- Updated pre-commit hook versions.
 
-- Introduced a custom error class `RatelimitIOError`, designed to mirror the behavior of `HTTPException`, making it easier to integrate with web frameworks like Flask, Django, and FastAPI.
-- Enhanced decorator functionality
-  - Automatically applies `base_limit` when the decorator is used without explicit arguments.
-- Added seamless support for distinguishing between incoming and outgoing requests using the `is_incoming` flag.
-- Implemented 429 Too Many Requests handling:
-  - Provides examples for integrating with Flask, Django, and FastAPI to manage error responses gracefully.
+## [0.6.3] - 2025-01-18
 
-### Fixes
+### Changed
 
-- Fixed an issue where `unique_key` fallback to `default_key` was inconsistent.
-- Improved Redis script loading to ensure proper error handling and robustness during high-concurrency operations.
+- README examples for async context managers.
 
-### Misc
+## [0.6.2] - 2025-01-18
 
-- Updated README with examples for:
-  - Using decorators and context managers for both sync and async workflows.
-  - Handling `429 Too Many Requests` errors in popular frameworks.
-- Enhanced test coverage to verify all added features and scenarios.
+### Added
 
-## Version 0.2.5
+- `RatelimitIO` works as an async context manager: `__aenter__` loads the Lua
+  script into Redis.
 
-### Misc
+## [0.6.1] - 2025-01-18
 
-- Adds shields `downloads`
+### Changed
 
-## Version 0.2.4
+- Version bump in `pyproject.toml` and README.
 
-### Misc
+## [0.6.0] - 2025-01-18
 
-- Edits README.md
+### Added
 
-## Version 0.2.3
+- Error classes `RatelimitIOError`, `RatelimitExceededError` and
+  `ScriptLoadError`.
+- Logging when the Lua script fails to load.
 
-### Features
+### Changed
 
-- Adds additional information in pyproject.toml
+- Shared logic between the sync and async paths; more tests.
 
-## Version 0.2.2
+## [0.5.0] - 2025-01-16
 
-### Misc
+### Added
 
-- Fix GitHub Action `Build`, delete macos-latest and windows-latest
+- `is_incoming` inferred for bare decorators.
+- Key priority `provided_key > unique_key > default_key > kwargs["ip"] >
+  "unknown_key"`, with `async`/`sync` prefixes.
 
-## Version 0.2.1
+### Removed
 
-### Misc
+- The `base_url` parameter, replaced by `default_key`.
 
-- Fix GitHub Action `Build`
+### Changed
 
-## Version 0.2.0
+- PyPI builds run only for release commits.
+- CONTRIBUTING describes the pre-commit hooks.
 
-### Misc
+## [0.4.0] - 2025-01-16
 
-- Adds wheel builds to GitHub Actions
+### Fixed
 
-## Version 0.1.1
+- `default_key` defaults to `None`, so `kwargs["ip"]` is used when no key is
+  given.
+- Key handling in `wait` and `a_wait`, and `NoneType` errors when no
+  `limit_spec` was given.
 
-### Misc
+## [0.3.1] - 2025-01-15
 
-- Fix `shields` for licence
+### Fixed
 
-## Version 0.1.0
+- Python 3.8 and 3.9 compatibility of the type annotations.
 
-- Initial release
+### Changed
+
+- README middleware examples for FastAPI and Django.
+
+## [0.3.0] - 2025-01-15
+
+### Added
+
+- `RatelimitIOError`, modelled on `HTTPException`.
+- The `is_incoming` flag and 429 handling examples for Flask, Django and
+  FastAPI.
+
+### Fixed
+
+- `unique_key` fallback to `default_key`; script loading under concurrency.
+
+## [0.2.5] - 2025-01-15
+
+### Changed
+
+- Downloads badge.
+
+## [0.2.4] - 2025-01-15
+
+### Changed
+
+- README edits.
+
+## [0.2.3] - 2025-01-15
+
+### Added
+
+- Package metadata in `pyproject.toml`.
+
+## [0.2.0] - 2025-01-15
+
+### Added
+
+- Wheel builds in GitHub Actions.
+
+## [0.1.1] - 2025-01-15
+
+### Fixed
+
+- License badge.
+
+## [0.1.0] - 2025-01-15
+
+- Initial release.
+
+[Unreleased]: https://github.com/bagowix/ratelimit-io/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/bagowix/ratelimit-io/compare/0.6.5...v1.0.0
+[0.6.5]: https://github.com/bagowix/ratelimit-io/compare/0.6.4...0.6.5
+[0.6.4]: https://github.com/bagowix/ratelimit-io/compare/0.6.3...0.6.4
+[0.6.3]: https://github.com/bagowix/ratelimit-io/compare/0.6.2...0.6.3
+[0.6.2]: https://github.com/bagowix/ratelimit-io/compare/0.6.1...0.6.2
+[0.6.1]: https://github.com/bagowix/ratelimit-io/compare/0.6.0...0.6.1
+[0.6.0]: https://github.com/bagowix/ratelimit-io/compare/0.5.0...0.6.0
+[0.5.0]: https://github.com/bagowix/ratelimit-io/compare/0.4.0...0.5.0
+[0.4.0]: https://github.com/bagowix/ratelimit-io/compare/0.3.1...0.4.0
+[0.3.1]: https://github.com/bagowix/ratelimit-io/compare/0.3.0...0.3.1
+[0.3.0]: https://github.com/bagowix/ratelimit-io/compare/0.2.5...0.3.0
+[0.2.5]: https://github.com/bagowix/ratelimit-io/compare/0.2.4...0.2.5
+[0.2.4]: https://github.com/bagowix/ratelimit-io/compare/0.2.3...0.2.4
+[0.2.3]: https://github.com/bagowix/ratelimit-io/compare/0.2.0...0.2.3
+[0.2.0]: https://github.com/bagowix/ratelimit-io/compare/0.1.1...0.2.0
+[0.1.1]: https://github.com/bagowix/ratelimit-io/compare/0.1.0...0.1.1
+[0.1.0]: https://github.com/bagowix/ratelimit-io/releases/tag/0.1.0
