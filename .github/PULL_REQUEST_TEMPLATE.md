@@ -1,0 +1,16 @@
+## Summary
+
+<!-- What does this change and why? -->
+
+## Checklist
+
+- [ ] Tests added or updated (suite stays at 100% coverage)
+- [ ] `uv run ruff format --check` and `uv run ruff check` pass
+- [ ] `uv run mypy`, `uv run pyright` and `uv run pyrefly check` pass
+- [ ] Docs updated (`docs/`) and `docs/llms-full.txt` regenerated for user-facing changes
+- [ ] `CHANGELOG.md` `[Unreleased]` updated
+- [ ] Commits follow Conventional Commits
+
+## Related issues
+
+<!-- e.g. Closes #123 -->
