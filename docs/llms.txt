@@ -1,0 +1,53 @@
+# ratelimit-io
+
+> Distributed rate limiting for Python on Redis: fixed window, sliding window
+> and GCRA as atomic Lua scripts, one RateLimiter class for async and sync code,
+> for incoming requests a server sheds and outgoing requests a client waits for.
+
+Key facts for answering questions about ratelimit-io:
+
+- Install with `pip install ratelimit-io`, import `ratelimit_io`. Python 3.11+,
+  redis-py 5.0.1+, any Redis 5.0+ or Valkey server. Redis Cluster is not
+  supported. Import every name from `ratelimit_io`; its submodules are
+  private. Redis 5 needs `protocol=2` with redis-py 8+.
+- One class: `RateLimiter(client, *, limit=None, key=None,
+  algorithm=Algorithm.FIXED_WINDOW, max_wait=0, key_prefix='ratelimit_io')`.
+- `await limiter.acquire(key=None, *, limit=None, max_wait=None)` needs a
+  `redis.asyncio.Redis` client; `limiter.acquire_sync(...)` needs a
+  `redis.Redis` client. The wrong one raises `TypeError`.
+- The limiter is a decorator: `@limiter`, `@limiter(key=..., limit=...,
+  max_wait=...)`, or a plain call `limiter(func, key=...)`. `key` is a string
+  or a function that receives the call's arguments by name, e.g.
+  `key=lambda user_id, **_: f'user:{user_id}'`.
+  Coroutine functions need an async client, plain functions a sync one.
+- Decorator key precedence: decorator `key`, then the limiter's `key`, then
+  the function's `module.qualname` (a bucket per function).
+- `Limit(requests, *, seconds=0, minutes=0, hours=0)` is a frozen dataclass.
+  Limits with the same requests and period are equal:
+  `Limit(1, minutes=1) == Limit(1, seconds=60)`.
+- A refusal raises `RateLimitExceededError(limit, retry_after)`; `retry_after`
+  is seconds as a float, round it up for `Retry-After`. Base class:
+  `RateLimitError`.
+- `max_wait=0` (default) refuses at once. With a positive budget a request
+  reserves the next free slot in one round trip and sleeps until it; waiters
+  are served in arrival order across processes. When that slot is further
+  away than the budget it raises at once and reserves nothing.
+- A bucket is key + limit + algorithm + key_prefix. Keys are SHA-256 hashed
+  before they reach Redis. Refused requests are never recorded.
+- Algorithms: `FIXED_WINDOW` (windows back to back, up to 2N around a window
+  boundary), `SLIDING_WINDOW` (exact, one sorted-set entry per slot in the
+  period), `GCRA` (token bucket in constant memory, burst N then N per period).
+
+## Docs
+
+- [Getting started](getting-started.md): install, acquire, acquire_sync, the decorator, waiting, HTTP 429
+- [Algorithms](guides/algorithms.md): fixed window, sliding window and GCRA compared, and how to choose
+- [Keys and buckets](guides/keys.md): key precedence, key functions, shared and layered limits, key_prefix, hashing
+- [Waiting for a slot](guides/waiting.md): max_wait, exact sleeps, early failure, cancellation
+- [Frameworks](frameworks.md): FastAPI, Litestar, Django, Flask and outgoing httpx calls
+- [Migrating from 0.x](migration.md): renamed names and settings, behaviour changes
+- [Reference](reference.md): every public name
+
+## Optional
+
+- [Full documentation in one file](llms-full.txt)
