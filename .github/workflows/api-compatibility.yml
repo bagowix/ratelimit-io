@@ -1,0 +1,66 @@
+name: API compatibility
+
+# griffe check diffs the public API of the working tree against the latest
+# release tag: everything ratelimit_io/__init__.py re-exports. A detected
+# breakage is not automatically wrong, but it must be deliberate, so the job is
+# failable but overridable: label the pull request `breaking-change` to
+# acknowledge it.
+on:
+  pull_request:
+
+concurrency:
+  group: api-compatibility-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  griffe:
+    runs-on: ubuntu-latest
+    env:
+      UV_PYTHON: '3.13'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # tags must be present locally; griffe resolves the latest one itself
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Check public API against the latest release
+        id: griffe
+        continue-on-error: true
+        run: |
+          # The `-f github` run annotates the diff; the gate reads the `oneline`
+          # run so one benign finding can be filtered out of it. Every release
+          # bumps `ratelimit_io.VERSION`, and griffe reports the new value as an
+          # attribute change: that is the release mechanism working, not an API
+          # breakage. The filter is deliberately narrow (that attribute, in that
+          # file, that one check); if griffe rewords the message it stops
+          # matching and this job fails, which is the safe direction to fail in.
+          uv run griffe check ratelimit_io --search . -f github || true
+          uv run griffe check ratelimit_io --search . -f oneline \
+            > "${RUNNER_TEMP}/griffe.txt" 2>&1 || true
+          grep -vE '^ratelimit_io/version\.py:[0-9]+: VERSION: Attribute value was changed:' \
+            "${RUNNER_TEMP}/griffe.txt" > "${RUNNER_TEMP}/breakages.txt" || true
+          if [ -s "${RUNNER_TEMP}/breakages.txt" ]; then
+            cat "${RUNNER_TEMP}/breakages.txt"
+            exit 1
+          fi
+
+      - name: Acknowledge intentional breakage
+        if: steps.griffe.outcome == 'failure' && contains(github.event.pull_request.labels.*.name, 'breaking-change')
+        run: echo '::warning::griffe reported a public-API breakage, acknowledged via the "breaking-change" label.'
+
+      - name: Fail on unacknowledged breakage
+        if: steps.griffe.outcome == 'failure' && !contains(github.event.pull_request.labels.*.name, 'breaking-change')
+        run: |
+          echo '::error::griffe detected a public-API breakage. If intentional, label the pull request "breaking-change" and record it in CHANGELOG.md.'
+          exit 1
