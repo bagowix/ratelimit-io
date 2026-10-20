@@ -1,117 +1,194 @@
-[tool.poetry]
+[build-system]
+# 1.30 is the first release that writes `import-names` (PEP 794); older ones drop it silently.
+requires = ["hatchling>=1.30"]
+build-backend = "hatchling.build"
+
+[project]
 name = "ratelimit-io"
-version = "0.6.5"
-description = "Flexible bidirectional rate-limiting library with redis backend"
-authors = ["Galushko Bogdan <galushko355@gmail.com>"]
-license = "MIT"
+import-names = ["ratelimit_io"]
+dynamic = ["version"]
+description = "Distributed rate limiting for Python on Redis: fixed window, sliding window and GCRA, sync and async, for incoming and outgoing requests."
 readme = "README.md"
-packages = [{ include = "ratelimit_io"}]
-
-package-mode = true
-
-repository = "https://github.com/bagowix/ratelimit-io"
-
-keywords = [
-    "rate-limit",
-    "ratelimit",
-    "rate limit",
-    "throttle",
-    "rate control",
-    "rate-limiting",
-    "ratelimiting",
-    "limit",
-    "limiting",
-    "asyncio",
-    "I/O",
-    "redis",
-    "aioredis",
+requires-python = ">=3.11"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [
+    { name = "bagowix", email = "galushko355@gmail.com" },
 ]
-
+keywords = ["rate-limit", "ratelimit", "rate-limiting", "throttle", "redis", "valkey", "asyncio", "gcra", "sliding-window"]
 classifiers = [
-    "Programming Language :: Python :: 3",
-    "Topic :: Software Development :: Libraries",
-    "Topic :: Internet",
-    "Topic :: System :: Networking",
+    "Development Status :: 5 - Production/Stable",
+    "Framework :: AsyncIO",
     "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Programming Language :: Python :: 3.15",
+    "Topic :: Internet",
+    "Topic :: Software Development :: Libraries",
+    "Typing :: Typed",
+]
+dependencies = [
+    "redis>=5.0.1",
 ]
 
-[tool.poetry.dependencies]
-python = "^3.8"
-redis = "^5.2.1"
+[project.urls]
+Homepage = "https://bagowix.github.io/ratelimit-io/"
+Documentation = "https://bagowix.github.io/ratelimit-io/"
+Repository = "https://github.com/bagowix/ratelimit-io"
+Changelog = "https://github.com/bagowix/ratelimit-io/blob/main/CHANGELOG.md"
+Issues = "https://github.com/bagowix/ratelimit-io/issues"
+Security = "https://github.com/bagowix/ratelimit-io/security/policy"
 
-[tool.poetry.group.dev.dependencies]
-mypy = "^1.14.1"
-ruff = "^0.9.1"
-pytest = "^8.3.4"
-pytest-cov = "^5.0.0"
-pytest-asyncio = "^0.18.3"
-pre-commit = "^3.5"
-fakeredis = "^2.26.2"
-cibuildwheel = "^2.22.0"
+[tool.hatch.version]
+path = "ratelimit_io/version.py"
+
+[[tool.uv.index]]
+url = "https://pypi.org/simple"
+default = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["ratelimit_io"]
+
+[tool.hatch.build.targets.sdist]
+# Hypothesis (run by the release job's tests) and Zensical (a local docs build)
+# leave caches in the checkout. Git ignores them through the nested .gitignore
+# each writes there; hatchling reads only the root one.
+exclude = [".hypothesis/", ".cache/"]
 
 [tool.ruff]
-line-length = 79
-target-version = "py38"
-
-[tool.ruff.lint]
-    ignore = [
-        "PT001",
-        "PT023",
-        "SIM103",
-    ]
-    select = [
-        "B",    # flake8-bugbear,
-        "C4",   # flake8-comprehensions
-        "E",    # pycodestyle error
-        "F",    # pyflakes
-        "SIM",  # flake8-simplify
-        "T20",  # flake8-print
-        "W",    # pycodestyle warning
-        "UP",   # pyupgrade
-        "I",    # isort
-    ]
-
-[tool.ruff.lint.mccabe]
-max-complexity = 12
-
-
-[tool.ruff.lint.per-file-ignores]
-"__init__.py" = [
-    "F401",
-    "F403",
-]
-"test_*.py" = [
-    "S101",
-    "E501",
-    "ANN201",
-]
-
-[tool.ruff.lint.isort]
-known-first-party = [
-    "ratelimit_io",
-]
-known-third-party = [
-    "asyncio",
-    "hashlib",
-    "redis",
-    "pytest",
-    "pytest-asyncio",
-]
-section-order = [
-    "future",
-    "standard-library",
-    "third-party",
-    "first-party",
-    "local-folder",
-]
-force-single-line = true
+src = ["ratelimit_io", "tests"]
+line-length = 100
+target-version = "py311"
 
 [tool.ruff.format]
-quote-style = "double"
+quote-style = "single"
+
+[tool.ruff.lint]
+select = ["ALL"]
+ignore = [
+  "COM812",
+  "ISC001",
+  "TRY003",
+  "EM101",
+  "EM102",
+  "N818",
+  "RUF001",
+  "RUF002",
+  "RUF003",
+  "TD002",
+  "TD003",
+  "FIX002",
+  "D105",
+  "D107",
+  "CPY001", # the project does not require copyright headers in source files
+]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.isort]
+known-first-party = ["ratelimit_io"]
+
+[tool.ruff.lint.flake8-quotes]
+inline-quotes = "single"
+
+[tool.ruff.lint.flake8-tidy-imports]
+ban-relative-imports = "all"
+
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+"typing.List".msg = "Use list[] instead."
+"typing.Dict".msg = "Use dict[] instead."
+"typing.Set".msg = "Use set[] instead."
+"typing.Optional".msg = "Use X | None instead."
+"typing.Union".msg = "Use X | Y instead."
+"typing.Type".msg = "Use type[] instead."
+
+[tool.ruff.lint.per-file-ignores]
+"scripts/**/*.py" = [
+  "INP001",  # scripts is a run-directly directory, not an importable package
+]
+"tests/**/*.py" = [
+  "S101",    # asserts are the point of tests
+  "PLR2004", # magic values are fine in tests
+  "D",       # test names are the documentation (test__unit__state__expected)
+  "INP001",  # tests is not an importable package
+  "FBT001",  # boolean params come from @parametrize, not real flag args
+  "SLF001",  # bucket_of() reads the bucket name the limiter derives for a key
+]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_unreachable = true
+show_error_codes = true
+files = ["ratelimit_io", "tests/typing_surface.py"]
+
+[tool.pyright]
+include = ["ratelimit_io", "tests/typing_surface.py"]
+pythonVersion = "3.11"
+typeCheckingMode = "strict"
+reportUnnecessaryTypeIgnoreComment = true
+
+[tool.pyrefly]
+project-includes = ["ratelimit_io", "tests/typing_surface.py"]
+python-version = "3.11"
+preset = "strict"
+
+[tool.pyrefly.errors]
+# typing.override is 3.12+, and the package carries no typing_extensions
+# dependency to backport it, so overrides cannot be decorated while 3.11 is
+# supported.
+missing-override-decorator = false
+
+[tool.pymarkdown]
+plugins.MD013.enabled = false   # line-length limit disabled
+plugins.MD029.style = "ordered" # consistent ordered list numbering
+plugins.MD033.enabled = false   # allow inline HTML (useful for docs)
+plugins.MD046.enabled = false   # pymdownx.tabbed indents fenced blocks; the style check misfires
+plugins.MD041.enabled = false   # do not require an H1 at the top of every file
 
 [tool.pytest.ini_options]
-asyncio_mode = "auto"
+testpaths = ["tests"]
+# Parallel by default (pytest-xdist); use `-n 0` for serial runs / --pdb debugging.
+addopts = "-n auto"
+asyncio_mode = "strict"
+asyncio_default_fixture_loop_scope = "function"
+filterwarnings = ["error"]
 
-[build-system]
-requires = ["poetry-core<=1.8.5"]
-build-backend = "poetry.core.masonry.api"
+[tool.coverage.run]
+branch = true
+source = ["ratelimit_io"]
+relative_files = true
+
+[tool.coverage.report]
+show_missing = true
+exclude_lines = [
+  "pragma: no cover",
+  "if TYPE_CHECKING:",
+  "@overload",
+  "^\\s*\\.\\.\\.\\s*$",
+]
+fail_under = 100
+
+[dependency-groups]
+dev = [
+    "check-wheel-contents>=0.6.3",
+    "fakeredis[lua]>=2.20.0",
+    "griffe>=2.1.0",
+    "hypothesis>=6.155.7",
+    "mypy>=2.1.0",
+    "prek>=0.4.5",
+    "pyrefly>=1.2.0",
+    "pyright>=1.1.411",
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+    "pytest-cov>=7.1.0",
+    "pytest-mock>=3.15.1",
+    "pytest-xdist>=3.8.0",
+    "ruff>=0.15.18",
+    "twine>=7.0.0",
+    "zensical>=0.0.46",
+    "zizmor>=1.29.0",
+]

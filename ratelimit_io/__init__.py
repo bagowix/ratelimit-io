@@ -1,13 +1,19 @@
-from ratelimit_io.rate_limit import LimitSpec
-from ratelimit_io.rate_limit import RatelimitExceededError
-from ratelimit_io.rate_limit import RatelimitIO
-from ratelimit_io.rate_limit import RatelimitIOError
-from ratelimit_io.rate_limit import ScriptLoadError
+"""ratelimit-io — distributed rate limiting for Python on Redis."""
 
-__all__ = [
-    "RatelimitIO",
-    "LimitSpec",
-    "RatelimitIOError",
-    "RatelimitExceededError",
-    "ScriptLoadError",
-]
+from ratelimit_io._algorithm import Algorithm
+from ratelimit_io._errors import RateLimitError, RateLimitExceededError
+from ratelimit_io._limit import Limit
+from ratelimit_io._limiter import RateLimiter
+from ratelimit_io.version import VERSION
+
+__version__ = VERSION
+
+__all__ = (
+    'VERSION',
+    'Algorithm',
+    'Limit',
+    'RateLimitError',
+    'RateLimitExceededError',
+    'RateLimiter',
+    '__version__',
+)

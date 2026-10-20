@@ -1,0 +1,291 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+# Least-privilege default for every job; nothing here writes to the repository.
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.11', '3.12', '3.13', '3.14', '3.15']
+    env:
+      UV_PYTHON: ${{ matrix.python-version }}
+      RATELIMIT_IO_TEST_REDIS_URL: redis://localhost:6379/0
+      # Keeps every `uv run` below from syncing back the packages the install
+      # step skips.
+      UV_NO_SYNC: '1'
+    services:
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The default cache key ignores UV_PYTHON, so the whole matrix would share
+      # one entry and keep the wheels of whichever job finished first.
+      - name: Install uv
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          enable-cache: true
+          cache-suffix: ${{ matrix.python-version }}
+
+      # lupa (fakeredis' Lua engine) and zensical (the docs build) are the
+      # slowest source builds on the newest interpreters, and this job uses
+      # neither: the tests hit the Redis service, the Docs job builds the docs.
+      - name: Install dependencies
+        run: uv sync --frozen --no-install-package lupa --no-install-package zensical
+
+      # The token buys the online audits, which are the ones that make a SHA pin
+      # mean anything: impostor-commit, ref-confusion, known-vulnerable-actions
+      # and stale-action-refs all read the GitHub API. Without one zizmor warns
+      # and degrades to the offline subset, which is what a local run does.
+      - name: Zizmor
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: uv run zizmor .github/
+
+      - name: Ruff format
+        run: uv run ruff format --check
+
+      - name: Ruff lint
+        run: uv run ruff check
+
+      - name: Mypy
+        run: uv run mypy
+
+      - name: Pyright
+        run: uv run pyright
+
+      - name: Pyrefly
+        run: uv run pyrefly check
+
+      - name: Tests
+        run: uv run pytest --cov
+
+  # The README promises Redis 5.0+ and Valkey; the quality job covers Redis 7.
+  servers:
+    name: Tests (${{ matrix.name }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Redis 5 predates RESP3, which redis-py 8 speaks by default.
+          - name: Redis 5
+            image: redis:5
+            cli: redis-cli
+            url: redis://localhost:6379/0?protocol=2
+          - name: Redis 6.2
+            image: redis:6.2
+            cli: redis-cli
+            url: redis://localhost:6379/0
+          - name: Valkey 8
+            image: valkey/valkey:8
+            cli: valkey-cli
+            url: redis://localhost:6379/0
+    env:
+      UV_PYTHON: '3.13'
+      RATELIMIT_IO_TEST_REDIS_URL: ${{ matrix.url }}
+      UV_NO_SYNC: '1'
+    services:
+      server:
+        image: ${{ matrix.image }}
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "${{ matrix.cli }} ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --frozen --no-install-package lupa --no-install-package zensical
+
+      - name: Tests
+        run: uv run pytest
+
+  # `uv run pytest` with no server must keep working: it is what a contributor
+  # runs first. The concurrency tests skip here; everything else runs on
+  # fakeredis and still reaches 100% coverage.
+  fakeredis:
+    name: Tests (fakeredis)
+    runs-on: ubuntu-latest
+    env:
+      UV_PYTHON: '3.13'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Tests
+        run: uv run pytest --cov
+
+  deps-min:
+    name: Tests (minimum redis-py)
+    runs-on: ubuntu-latest
+    env:
+      UV_PYTHON: '3.11'
+      RATELIMIT_IO_TEST_REDIS_URL: redis://localhost:6379/0
+      UV_NO_SYNC: '1'
+    services:
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --frozen --no-install-package lupa --no-install-package zensical
+
+      # The floor in pyproject.toml is a compatibility promise; raising it on
+      # purpose means raising this pin too.
+      - name: Pin redis-py to the supported minimum
+        run: uv pip install 'redis==5.0.1'
+
+      - name: Tests
+        run: uv run pytest
+
+  packaging-smoke:
+    name: Packaging smoke test
+    runs-on: ubuntu-latest
+    env:
+      UV_PYTHON: '3.13'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Build sdist and wheel
+        run: uv build
+
+      # Metadata rendering and wheel layout are unfixable after upload: a
+      # version cannot be reused. Catch stray top-level files, a missing
+      # package, and PyPI long-description rendering errors here.
+      - name: twine check
+        run: uv run twine check dist/*
+
+      - name: check-wheel-contents
+        run: uv run check-wheel-contents dist/*.whl
+
+      # A venv separate from the `uv sync` one above: no dev group. This is
+      # what `pip install ratelimit-io` actually gets a user.
+      - name: Install the wheel into a clean environment
+        run: |
+          uv venv --python 3.11 "${RUNNER_TEMP}/smoke-env"
+          uv pip install --python "${RUNNER_TEMP}/smoke-env" dist/*.whl
+
+      # `ratelimit_io.__version__` must match the installed distribution's
+      # metadata, which must also declare `Import-Name: ratelimit_io` (PEP 794;
+      # a hatchling below the floor drops it silently), and `py.typed` must
+      # have survived the build.
+      - name: Import smoke test
+        run: |
+          "${RUNNER_TEMP}/smoke-env/bin/python" - <<'PY'
+          import importlib.metadata
+          import importlib.resources as resources
+
+          import ratelimit_io
+
+          installed_version = importlib.metadata.version('ratelimit-io')
+          assert ratelimit_io.__version__ == installed_version, (
+              ratelimit_io.__version__,
+              installed_version,
+          )
+
+          import_names = importlib.metadata.metadata('ratelimit-io').get_all('Import-Name')
+          assert import_names == ['ratelimit_io'], import_names
+
+          assert (resources.files('ratelimit_io') / 'py.typed').is_file(), (
+              'py.typed missing from the wheel'
+          )
+
+          print(f'OK: ratelimit-io {ratelimit_io.__version__}, py.typed present')
+          PY
+
+  docs:
+    name: Docs
+    runs-on: ubuntu-latest
+    env:
+      UV_PYTHON: '3.13'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Build site (strict)
+        run: uv run zensical build --strict
+
+      # Same step as docs.yml: the deploy publishes what this gate checked.
+      - name: Mirror Markdown pages and check llms.txt links
+        run: uv run python scripts/mirror_markdown.py
+
+      - name: llms-full.txt is up to date
+        run: |
+          uv run python scripts/build_llms_full.py
+          git diff --exit-code docs/llms-full.txt

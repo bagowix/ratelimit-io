@@ -1,0 +1,853 @@
+# ratelimit-io — full documentation
+
+> Distributed rate limiting for Python on Redis: fixed window, sliding window
+> and GCRA as atomic Lua scripts, one RateLimiter class for async and sync code,
+> for incoming requests a server sheds and outgoing requests a client waits for.
+
+This file inlines every documentation page in reading order. It is generated
+from the Markdown sources by ``scripts/build_llms_full.py``; edit the pages in
+``docs/``, not this file.
+
+
+---
+
+<!-- source: docs/getting-started.md -->
+
+# Getting started
+
+## Install
+
+```bash
+pip install ratelimit-io
+```
+
+You need a Redis 5.0+ or Valkey server. Redis 5 predates the RESP3 protocol
+that redis-py 8 speaks by default, so for it pass `protocol=2` to the client.
+For local work:
+
+```bash
+docker run --rm -p 6379:6379 redis:7
+```
+
+## Your first limiter
+
+A `RateLimiter` holds a Redis client and the defaults for its calls: the
+`Limit`, an optional bucket `key`, the counting `algorithm` and how long a
+refused request may wait (`max_wait`).
+
+```python
+from redis.asyncio import Redis
+
+from ratelimit_io import Limit, RateLimiter, RateLimitExceededError
+
+limiter = RateLimiter(Redis(), limit=Limit(5, seconds=1))
+
+
+async def handle(user_id: int) -> None:
+    try:
+        await limiter.acquire(f'user:{user_id}')
+    except RateLimitExceededError as error:
+        print(f'slow down, retry in {error.retry_after:.1f}s')
+        return
+
+    ...  # the request is within the limit
+```
+
+`acquire()` takes one request from the bucket of the key. The sixth call in a
+second for one user raises `RateLimitExceededError`. The error carries the
+`limit` that refused the request and `retry_after`, the seconds until a request
+on that key can pass again.
+
+## Sync code
+
+Pass a `redis.Redis` client and call `acquire_sync()`. Everything else is the
+same.
+
+```python
+from redis import Redis
+
+from ratelimit_io import Limit, RateLimiter
+
+sync_limiter = RateLimiter(Redis(), limit=Limit(5, seconds=1))
+
+sync_limiter.acquire_sync('user:42')
+```
+
+The client decides which method works: `acquire()` needs a
+`redis.asyncio.Redis`, `acquire_sync()` needs a `redis.Redis`. The other one
+raises `TypeError` and names the method to use.
+
+## The decorator
+
+The limiter is also a decorator. It takes a slot before each call and keeps the
+function's signature for type checkers.
+
+```python
+@limiter
+async def export_report() -> bytes: ...
+
+
+@limiter(key=lambda user_id, **_: f'user:{user_id}', limit=Limit(10, minutes=1))
+async def search(user_id: int, query: str) -> list[str]: ...
+```
+
+Without a key, a decorated function gets a bucket of its own, named after its
+module and qualified name. A string `key` names the bucket directly, and a
+function `key` computes it from each call's arguments. See
+[Keys and buckets](guides/keys.md).
+
+Coroutine functions need an async client and plain functions a sync one. The
+decorator checks this when it is applied, so a mismatch fails at import time
+rather than on the first request.
+
+## Waiting instead of failing
+
+A server should refuse an over-limit request at once: that is the default,
+`max_wait=0`. A client calling someone else's API usually has to make the call
+anyway, so it waits for a slot:
+
+```python
+github = RateLimiter(Redis(), limit=Limit(5000, hours=1), key='github', max_wait=30)
+
+
+async def fetch_repo(name: str) -> None:
+    await github.acquire()  # sleeps until a slot frees up, up to 30 s
+    ...
+```
+
+When the bucket is full, the limiter reserves the next free slot in the same
+round trip and sleeps until it, so it never polls Redis. When that slot lies
+beyond the budget it reserves nothing and raises straight away instead of
+sleeping in vain. See [Waiting for a slot](guides/waiting.md).
+
+A sleeping request holds no connection, but a burst of requests needs one per
+request in flight. When a burst can outgrow the client's connection pool, read
+[Connections and retries](guides/waiting.md#connections-and-retries).
+
+## Answering with HTTP 429
+
+`retry_after` is a float; the `Retry-After` header takes whole seconds, so
+round it up:
+
+```python
+import math
+
+headers = {'Retry-After': str(math.ceil(error.retry_after))}
+```
+
+[Frameworks](frameworks.md) shows the full setup for FastAPI, Django and Flask.
+
+## Next steps
+
+- [Algorithms](guides/algorithms.md): fixed window, sliding window, GCRA, and
+  which one to pick.
+- [Keys and buckets](guides/keys.md): per-user limits, shared limits, layered
+  limits, `key_prefix`.
+- [Reference](reference.md): every public name.
+
+---
+
+<!-- source: docs/guides/algorithms.md -->
+
+# Algorithms
+
+A limiter counts requests with one of three algorithms. Each one is a single
+Lua script that Redis runs atomically, so any number of processes can race for
+the same bucket and exactly the allowed number of requests get through.
+
+```python
+from ratelimit_io import Algorithm, Limit, RateLimiter
+
+limiter = RateLimiter(client, limit=Limit(100, minutes=1), algorithm=Algorithm.SLIDING_WINDOW)
+```
+
+`Algorithm.FIXED_WINDOW` is the default. To read the choice from configuration,
+convert the string: `Algorithm(settings.rate_limit_algorithm)` accepts
+`'fixed_window'`, `'sliding_window'` and `'gcra'`.
+
+## At a glance
+
+| | Fixed window | Sliding window | GCRA |
+|---|---|---|---|
+| Guarantee | at most N per window, up to 2N around a window boundary | at most N in any period-long interval | a burst of at most N, then N per period on average |
+| Memory per bucket | two numbers | one entry per slot handed out in the last period | two numbers |
+| `retry_after` on refusal | until the window ends | until the oldest request leaves the window | until the next request conforms |
+| Pick it for | per-user or per-IP limits | strict quotas of someone else's API | smooth traffic, token-bucket semantics |
+
+These rules hold for every algorithm:
+
+- **A refused request is not recorded.** A client that keeps knocking while
+  blocked does not push its own unblocking further away.
+- **A waiting request reserves its slot.** With a wait budget, a request that
+  finds the bucket full takes the next free slot in advance and sleeps until
+  it. Waiters are served in arrival order; see
+  [Waiting for a slot](waiting.md).
+- **Time comes from Redis.** Every script reads the server's `TIME`, to the
+  microsecond. Clock skew between application hosts cannot bend a limit, and
+  a bucket that loses its expiry still counts correctly, because expiry only
+  removes buckets nobody uses.
+
+## Fixed window
+
+The first request opens a window one period long with N slots. Requests take
+the slots of the current window; once they are gone, a request is refused
+until the window ends, or with a wait budget reserves a slot in the next
+window, which starts the moment the current one ends.
+
+It is the simplest algorithm, and its weakness is the boundary: N requests at
+the end of one window and N more at the start of the next pass within a very
+short time. When that burst is harmless, which it is for most per-user limits,
+the fixed window is the right default.
+
+## Sliding window
+
+A log of the slots handed out per bucket, kept in a sorted set. A request is
+allowed when fewer than N slots fall within the last period, so no period-long
+interval ever holds more than N. A waiting request is logged at the slot it
+reserves, one period after the slot N places before it.
+
+The price is memory: a bucket holds one entry per slot handed out in the last
+period, plus one per waiting request. For 100 requests a minute that is
+nothing. For a million requests a day per key, choose GCRA.
+
+Pick the sliding window when exceeding the limit has a cost you cannot absorb,
+typically an external API that bans clients for going over its quota. Set the
+limit a little below that quota all the same: the limiter counts a request when
+it takes its slot, and the network delays each request by a different amount
+on its way to the provider.
+
+## GCRA
+
+The generic cell rate algorithm is a token bucket in constant memory: per
+bucket it keeps how far ahead the theoretical arrival time of the next request
+lies. A full bucket allows a burst of N requests; after that it refills one
+request every `period / N`.
+
+GCRA limits the rate, not the count per window. Over a long run the average is
+exactly N per period, and traffic comes out evenly spread. Within one period-long
+interval, though, a full burst plus a period of refills can add up to
+2N − 1 requests.
+
+`retry_after` is exact and usually short: after a burst against
+`Limit(60, minutes=1)` the next request conforms one second later.
+
+## Switching algorithms
+
+The algorithm is part of the bucket name, so a limiter with a different
+algorithm starts with empty buckets instead of misreading the old ones. Switching
+in a deploy resets every counter once.
+
+---
+
+<!-- source: docs/guides/keys.md -->
+
+# Keys and buckets
+
+A bucket is what a limit is counted in. Its identity has four parts:
+
+- the **key**, such as `user:42` or the client's IP address;
+- the **limit**, so `Limit(10, seconds=1)` and `Limit(1000, hours=1)` on one
+  key count separately;
+- the **algorithm**;
+- the limiter's **`key_prefix`**, `ratelimit_io` by default.
+
+Two calls share a bucket only when all four match.
+
+## Keys for `acquire()`
+
+The key is the first argument. Without one, the limiter's own `key` is used,
+which suits a limiter that guards a single resource:
+
+```python
+github = RateLimiter(client, limit=Limit(5000, hours=1), key='github')
+
+await github.acquire()  # the 'github' bucket
+await github.acquire('search')  # the 'search' bucket
+```
+
+With neither, `acquire()` raises `ValueError`. Every request needs a bucket,
+and the limiter never invents one.
+
+## Keys for the decorator
+
+The decorator finds the key of each call in this order:
+
+1. the decorator's `key`: a string, or a function of the call's arguments;
+2. the limiter's `key`;
+3. the function's `module.qualname`, which gives every decorated function a
+   bucket of its own.
+
+```python
+limiter = RateLimiter(client, limit=Limit(10, seconds=1))
+
+
+@limiter  # bucket: 'shop.views.checkout'
+async def checkout(order_id: int) -> None: ...
+
+
+@limiter(key=lambda user_id, **_: f'user:{user_id}')  # one bucket per user
+async def search(user_id: int, query: str) -> list[str]: ...
+```
+
+A key function receives the call's arguments by name, defaults included,
+however the caller passed them: `search(42, 'shoes')` and
+`search(user_id=42, query='shoes')` both reach it as `user_id=42,
+query='shoes'`. Name the parameters you need and swallow the rest with `**_`.
+On a method, `self` arrives too; `*args` and `**kwargs` parameters arrive under
+their own names, as a tuple and a dict.
+
+The arguments are bound to the signature of the function under `@limiter`,
+seen through any `functools.wraps` wrapper. Put `@limiter` directly above the
+`def`, below decorators that add or remove parameters, such as `mock.patch`.
+
+It must return a non-empty string. An empty string is a bug in the function, so
+it raises `ValueError`, and anything other than a string raises `TypeError`;
+the limiter never falls back to a shared bucket.
+
+Under strict pyright or pyrefly, prefer a typed function to a lambda: the
+parameters of a lambda passed as `key` have no inferred types.
+
+Functions made inside another function share a `module.qualname`, such as
+`make_handler.<locals>.handler`, so every function one factory makes shares a
+bucket. Give them a key when they should count apart.
+
+## Several functions, one bucket
+
+Give them the same key. A limiter-wide `key` does that for every function it
+decorates, which is what an outgoing client wants:
+
+```python
+payments = RateLimiter(client, limit=Limit(100, seconds=1), key='payments-api', max_wait=5)
+
+
+@payments
+async def charge(card: str, amount: int) -> None: ...
+
+
+@payments
+async def refund(charge_id: str) -> None: ...
+```
+
+## Layered limits
+
+Short bursts and long-term volume are separate limits, so take a slot from
+each. The two limits count separately even on the same key:
+
+```python
+await limiter.acquire(user_key, limit=Limit(10, seconds=1))
+await limiter.acquire(user_key, limit=Limit(1000, hours=1))
+```
+
+The calls are independent. A request that passes the first limit and fails
+the second has still used a slot of the first.
+
+## Hashed keys
+
+Keys are hashed with SHA-256 before they reach Redis. A bucket looks like
+`ratelimit_io:fixed_window:10/1000ms:9f86d0…`: the raw key appears neither in
+the keyspace nor in `MONITOR` nor in a dump, and a long key makes a name as
+short as any other.
+
+A hash hides a key only from someone who cannot guess it. IPv4 addresses and
+sequential user ids are few enough to hash every one of them, so whoever can
+read the keyspace can recover such keys. Restrict access to Redis as you would
+restrict access to the keys themselves.
+
+## `key_prefix`
+
+Every bucket lives under the limiter's `key_prefix`. Two applications that
+share a Redis server and limit the same key under the same limit share a bucket
+unless their prefixes differ:
+
+```python
+RateLimiter(client, limit=..., key_prefix='billing')
+RateLimiter(client, limit=..., key_prefix='search')
+```
+
+Buckets expire on their own once nothing in them counts any more, so a prefix
+never has to be cleaned up by hand.
+
+---
+
+<!-- source: docs/guides/waiting.md -->
+
+# Waiting for a slot
+
+`max_wait` is how many seconds a request may wait for a slot. It is set on the
+limiter and can be overridden per call or per decorated function.
+
+```python
+limiter = RateLimiter(client, limit=Limit(10, seconds=1), max_wait=5)
+
+await limiter.acquire('reports')  # waits up to 5 s
+await limiter.acquire('reports', max_wait=0)  # fails at once
+
+
+@limiter(max_wait=30)
+async def nightly_export() -> None: ...
+```
+
+## Fail at once: incoming requests
+
+`max_wait=0` is the default. A server that is over its limit should answer
+`429 Too Many Requests` immediately: holding the connection open only ties up a
+worker, and the client knows best whether to retry. The error's `retry_after`,
+rounded up, goes into the `Retry-After` header.
+
+## Wait: outgoing requests
+
+A client of someone else's API usually has to make the call anyway. With a
+budget, a request that finds the bucket full reserves the next free slot and
+sleeps until it comes.
+
+The script that counts the request makes the reservation in the same round
+trip. The limiter then sleeps once and returns; it never polls Redis and never
+retries. A hundred waiting workers cost a hundred sleeping coroutines and one
+round trip each, and each one wakes at the slot it booked and goes ahead
+without asking Redis again. GCRA spaces those slots evenly. The window
+algorithms hand them out the way they admit requests, so waiters booked for the
+same moment, such as the start of the next fixed window, wake together.
+
+Waiting requests are served in arrival order, across every process that
+shares the bucket. A request that arrives while others wait queues behind
+them, even with `max_wait=0`, so its `retry_after` counts the queue too.
+
+When the next free slot lies further away than the budget, the limiter
+reserves nothing and raises `RateLimitExceededError` at once. With
+`Limit(1, minutes=1)` and `max_wait=5`, a refused request fails straight away
+with `retry_after` close to 60, without wasting five seconds first.
+
+## Waiting without a deadline
+
+`max_wait=math.inf` waits as long as it takes. Use it for background jobs that
+must eventually run, never on a request path.
+
+## Cancellation
+
+`acquire()` sleeps with `asyncio.sleep`, so it is cancelled like any other
+coroutine: wrap it in `asyncio.timeout()` or cancel its task. A request
+cancelled while it sleeps has already reserved its slot, and that slot goes
+unused. The limit still holds, but the requests queued behind it wait as if it
+had run. To bound the wait, pass `max_wait`: a request that would wait too long
+then fails before it reserves anything.
+
+## Connections and retries
+
+Every `acquire()` is one round trip and holds a connection for that trip only,
+never while it sleeps. Still, N calls in flight at once need N connections. A
+redis-py connection pool has a `max_connections` cap (100 by default in
+redis-py 8) and raises `MaxConnectionsError` when a call needs one more. For
+bigger bursts, raise the cap or pass a `BlockingConnectionPool`, which makes
+callers wait for a free connection instead and raises `ConnectionError` once
+its `timeout`, 20 seconds by default, runs out.
+
+The limiter adds no retries or fallbacks of its own. When Redis is down,
+`acquire()` raises redis-py's error once the client's timeouts and `retry`
+settings give up. When redis-py retries a command whose reply was lost, the
+script runs a second time for a request it has already counted. The fixed
+window and GCRA then count the request twice. The sliding window counts it
+once, at the slot the second run picks, which can be a whole period later. The
+second run may also refuse a request the first one let through. A lost reply
+can waste slots, and the limit holds all the same.
+
+---
+
+<!-- source: docs/frameworks.md -->
+
+# Frameworks
+
+ratelimit-io has no framework integrations to install: a limiter is called
+from a dependency, a middleware or a decorator, and `RateLimitExceededError`
+becomes a `429` with a `Retry-After` header. `retry_after` is a float, and the
+header takes whole seconds, so round it up.
+
+## FastAPI
+
+A dependency limits every route that declares it, and an exception handler
+turns refusals into responses:
+
+```python
+import math
+
+from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse
+from redis.asyncio import Redis
+
+from ratelimit_io import Limit, RateLimiter, RateLimitExceededError
+
+app = FastAPI()
+limiter = RateLimiter(Redis(), limit=Limit(100, minutes=1))
+
+
+@app.exception_handler(RateLimitExceededError)
+async def too_many_requests(request: Request, error: RateLimitExceededError) -> JSONResponse:
+    return JSONResponse(
+        {'detail': 'Too many requests'},
+        status_code=429,
+        headers={'Retry-After': str(math.ceil(error.retry_after))},
+    )
+
+
+async def rate_limit(request: Request) -> None:
+    if request.client is None:
+        raise HTTPException(500, 'no client address to rate limit by')
+
+    await limiter.acquire(f'{request.url.path}:{request.client.host}')
+
+
+@app.get('/items', dependencies=[Depends(rate_limit)])
+async def list_items() -> list[str]:
+    return []
+```
+
+`request.client` is `None` when the server sees no peer address, behind a Unix
+socket for example. Key on the address your proxy forwards then: a placeholder
+such as `'unknown'` would put every such client in one bucket.
+
+The decorator works on routes as well. It keeps the endpoint's signature, so
+FastAPI still sees the parameters, and a key function receives them by name:
+
+```python
+@app.get('/search')
+@limiter(key=lambda request, **_: f'search:{request.client.host}')
+async def search(request: Request, q: str) -> list[str]:
+    return []
+```
+
+Put `@app.get` above the limiter, so the route registers the limited function.
+
+## Litestar
+
+A guard runs before the handler, and an exception handler answers the refusal:
+
+```python
+import math
+
+from litestar import Litestar, Request, Response, get
+from litestar.connection import ASGIConnection
+from litestar.exceptions import InternalServerException
+from litestar.handlers.base import BaseRouteHandler
+from redis.asyncio import Redis
+
+from ratelimit_io import Limit, RateLimiter, RateLimitExceededError
+
+limiter = RateLimiter(Redis(), limit=Limit(100, minutes=1))
+
+
+async def rate_limit(connection: ASGIConnection, _: BaseRouteHandler) -> None:
+    if connection.client is None:
+        raise InternalServerException('no client address to rate limit by')
+
+    await limiter.acquire(f'{connection.url.path}:{connection.client.host}')
+
+
+def too_many_requests(request: Request, error: RateLimitExceededError) -> Response[dict[str, str]]:
+    return Response(
+        {'detail': 'Too many requests'},
+        status_code=429,
+        headers={'Retry-After': str(math.ceil(error.retry_after))},
+    )
+
+
+@get('/items', guards=[rate_limit])
+async def list_items() -> list[str]:
+    return []
+
+
+app = Litestar(
+    route_handlers=[list_items],
+    exception_handlers={RateLimitExceededError: too_many_requests},
+)
+```
+
+## Django
+
+Django views are sync, so the limiter takes a `redis.Redis` client and calls
+`acquire_sync()`. A middleware covers every view:
+
+```python
+import math
+
+from django.http import HttpRequest, HttpResponse
+from redis import Redis
+
+from ratelimit_io import Limit, RateLimiter, RateLimitExceededError
+
+limiter = RateLimiter(Redis(), limit=Limit(100, minutes=1))
+
+
+class RateLimitMiddleware:
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    def __call__(self, request: HttpRequest) -> HttpResponse:
+        try:
+            limiter.acquire_sync(request.META['REMOTE_ADDR'])
+        except RateLimitExceededError as error:
+            response = HttpResponse('Too many requests', status=429)
+            response['Retry-After'] = str(math.ceil(error.retry_after))
+            return response
+
+        return self.get_response(request)
+```
+
+Behind a proxy, key on the client address your proxy forwards rather than on
+`REMOTE_ADDR`.
+
+## Flask
+
+An error handler plus the decorator on a view. Flask passes URL parameters as
+keyword arguments, so the key function swallows them with `**_`:
+
+```python
+import math
+
+from flask import Flask, request
+from redis import Redis
+
+from ratelimit_io import Limit, RateLimiter, RateLimitExceededError
+
+app = Flask(__name__)
+limiter = RateLimiter(Redis(), limit=Limit(100, minutes=1))
+
+
+@app.errorhandler(RateLimitExceededError)
+def too_many_requests(error: RateLimitExceededError):
+    return 'Too many requests', 429, {'Retry-After': str(math.ceil(error.retry_after))}
+
+
+@app.get('/items/<int:item_id>')
+@limiter(key=lambda **_: f'items:{request.remote_addr}')
+def get_item(item_id: int) -> str:
+    return str(item_id)
+```
+
+## Outgoing calls with httpx
+
+For a client of someone else's API, a limiter-wide key and a wait budget keep
+every call under the provider's quota:
+
+```python
+import httpx
+from redis.asyncio import Redis
+
+from ratelimit_io import Algorithm, Limit, RateLimiter
+
+github = RateLimiter(
+    Redis(),
+    limit=Limit(5000, hours=1),
+    key='github',
+    algorithm=Algorithm.SLIDING_WINDOW,
+    max_wait=30,
+)
+
+
+@github
+async def fetch_repo(client: httpx.AsyncClient, name: str) -> dict[str, object]:
+    response = await client.get(f'https://api.github.com/repos/{name}')
+    response.raise_for_status()
+    return response.json()
+```
+
+The sliding window never lets more than 5000 calls into any hour, which a fixed
+window cannot promise around its boundary. See [Algorithms](guides/algorithms.md).
+
+---
+
+<!-- source: docs/migration.md -->
+
+# Migrating from 0.x
+
+1.0 is a breaking release. It needs Python 3.11 or newer, renames the public
+names, and replaces two settings with one. The library's behaviour changed in
+places where 0.x was wrong; those changes are listed under
+[Behaviour](#behaviour).
+
+## Names
+
+| 0.x | 1.0 |
+|---|---|
+| `from ratelimit_io.rate_limit import ...` | `from ratelimit_io import ...` |
+| `RatelimitIO(backend, ...)` | `RateLimiter(client, ...)` |
+| `LimitSpec(5, seconds=1)` | `Limit(5, seconds=1)` |
+| `RatelimitIOError` | `RateLimitError` |
+| `RatelimitExceededError` | `RateLimitExceededError` |
+| `ScriptLoadError` | removed: the limiter reloads its script itself, and Redis errors propagate unchanged |
+| `limiter.wait(key, spec)` | `limiter.acquire_sync(key, limit=spec)` |
+| `await limiter.a_wait(key, spec)` | `await limiter.acquire(key, limit=spec)` |
+| `async with limiter:` | removed: there is nothing to set up or tear down |
+
+## Settings
+
+| 0.x | 1.0 |
+|---|---|
+| `default_limit=` | `limit=` |
+| `default_key=` | `key=` |
+| `is_incoming=True` | `max_wait=0`, the default |
+| `is_incoming=False` | `max_wait=10`, or any other budget in seconds |
+| `wait(..., max_wait_time=)` | `acquire_sync(..., max_wait=)` |
+| `backoff_start=`, `backoff_max=` | removed: a waiting request reserves its slot and sleeps until it |
+| decorator `unique_key='x'` | decorator `key='x'` |
+| `kwargs['ip']` picked up as the key | `key=lambda ip, **_: ip` |
+
+## Behaviour
+
+- **Refusals carry `retry_after`.** `RateLimitExceededError` has the `limit`
+  that refused the request and `retry_after` in seconds. The HTTP-flavoured
+  `status_code` and `detail` attributes are gone; answer with `429` yourself.
+- **The decorator raises `RateLimitExceededError`.** 0.x turned an exhausted
+  wait inside `@limiter(...)` into a bare `RuntimeError`.
+- **A waiting request reserves its slot.** 0.x polled Redis until a slot freed
+  up; 1.0 reserves the next free slot in one round trip and sleeps until it,
+  serving waiters in arrival order. A wait cancelled during its sleep still
+  uses its slot.
+- **Functions get their own bucket by qualified name.** 0.x used `__name__`,
+  so two methods called `get` on different classes shared one limit. 0.x also
+  gave sync and async functions separate buckets for the same key.
+- **The limiter's `key` is shared by the functions it decorates.** In 0.x a
+  `default_key` was still split per function.
+- **`ip` is no longer magic.** 0.x read `kwargs['ip']` and silently fell back
+  to one shared `"unknown_key"` bucket when `ip` was passed positionally. Name
+  the key explicitly.
+- **No silent fallback key.** `acquire()` without a key on a limiter without
+  one raises `ValueError`. 0.x counted such calls in `"unknown_key"`.
+- **Redis errors propagate.** 0.x turned every Redis failure, a refused
+  connection included, into `ScriptLoadError`.
+- **Validation is strict.** `Limit` refuses negative, infinite and fractional
+  request counts and periods under a millisecond. Keys must be non-empty
+  strings, `max_wait` a number of seconds. A mismatch between the client and
+  the call style (`acquire()` on a sync client, a coroutine function decorated
+  on a sync client) raises `TypeError` with the fix in the message.
+- **Import from `ratelimit_io` only.** The modules inside the package are
+  private and may move between releases.
+
+## Buckets start empty
+
+The bucket names changed: they now carry the algorithm and the limit, so
+layered limits on one key no longer collide. Counters from 0.x are not read
+after the upgrade and expire on their own within one period.
+
+---
+
+<!-- source: docs/reference.md -->
+
+# API reference
+
+Everything below is importable from the top-level `ratelimit_io` package. The
+modules inside it are private and may move between releases.
+
+## `RateLimiter`
+
+```python
+RateLimiter(client, *, limit=None, key=None, algorithm=Algorithm.FIXED_WINDOW,
+            max_wait=0, key_prefix='ratelimit_io')
+```
+
+A distributed rate limiter on Redis.
+
+- **`client`**: a `redis.asyncio.Redis` for `acquire()` and coroutine
+  functions, or a `redis.Redis` for `acquire_sync()` and plain functions.
+  Sentinel's `master_for()` returns such a client. Anything else raises
+  `TypeError`.
+- **`limit`**: the default `Limit` of calls that name none.
+- **`key`**: the default bucket key of calls that name none.
+- **`algorithm`**: see [`Algorithm`](#algorithm).
+- **`max_wait`**: seconds a request may wait for a slot. `0` fails at once;
+  `math.inf` waits as long as it takes.
+- **`key_prefix`**: the namespace of every bucket in Redis.
+
+Raises `TypeError` for an option of the wrong type, and `ValueError` for an
+empty `key` or `key_prefix`, a negative or NaN `max_wait`, or an unknown
+algorithm.
+
+### `await acquire(key=None, *, limit=None, max_wait=None)`
+
+Takes one slot from the bucket of `key` through an async client. When the
+bucket is full and its next free slot is at most `max_wait` seconds away, the
+request reserves that slot and sleeps until it; otherwise it raises
+`RateLimitExceededError` at once. Waiting requests are served in arrival order
+across processes. See [Waiting for a slot](guides/waiting.md).
+
+Raises `TypeError` on a sync client or for an argument of the wrong type, and
+`ValueError` when no key or no limit is given and the limiter has none.
+
+### `acquire_sync(key=None, *, limit=None, max_wait=None)`
+
+The blocking twin of `acquire()`, through a sync client.
+
+### `@limiter` / `@limiter(*, key=None, limit=None, max_wait=None)`
+
+Rate limits every call of the decorated function, recursive calls included.
+Coroutine functions take their slot with `acquire()`, plain functions with
+`acquire_sync()`. The wrapper keeps the function's signature and metadata.
+
+`limiter(func, *, key=None, limit=None, max_wait=None)` does the same for a
+function defined elsewhere, such as a method of a third-party client.
+
+The bucket key of a call is the decorator's `key` (a string, or a function that
+receives the call's arguments by name, defaults included, and returns one),
+else the limiter's `key`, else the function's `module.qualname`. See
+[Keys and buckets](guides/keys.md).
+
+Raises `TypeError` when the function's nature does not match the client, for
+a `staticmethod` or `classmethod` object (put `@limiter` below them), a
+generator function, anything not callable, or an option of the wrong type.
+Raises `ValueError` for an empty `key`, a negative `max_wait`, or when no limit
+is given and the limiter has none. A key function that returns an empty string
+raises `ValueError` on the call, and one that returns anything but a string
+raises `TypeError`.
+
+## `Limit`
+
+```python
+Limit(requests, *, seconds=0, minutes=0, hours=0)
+```
+
+Frozen dataclass: `requests` per period of `seconds + minutes + hours`. The
+period may be fractional and is enforced to the millisecond. Limits that allow
+the same requests per the same period are equal and hash alike:
+`Limit(1, minutes=1) == Limit(1, seconds=60)`.
+
+- **`total_seconds() -> float`**: the period in seconds.
+- **`period_ms() -> int`**: the period in whole milliseconds.
+- **`str(limit)`**: `'100/60s'`, with the period as enforced.
+
+`requests` can be any integer type, numpy's included, and is stored as an
+`int`. Raises `TypeError` when `requests` is not an integer or a period part is
+not a number (a bool is neither), and `ValueError` when `requests` is not
+positive, a period part is negative or not finite, or the period is shorter
+than a millisecond.
+
+## `Algorithm`
+
+`StrEnum` of the counting algorithms. See [Algorithms](guides/algorithms.md).
+
+- `Algorithm.FIXED_WINDOW = 'fixed_window'`, the default.
+- `Algorithm.SLIDING_WINDOW = 'sliding_window'`.
+- `Algorithm.GCRA = 'gcra'`.
+
+## `RateLimitExceededError`
+
+```python
+RateLimitExceededError(limit, retry_after)
+```
+
+Raised when a request is refused: the next free slot is further away than the
+request may wait.
+
+- **`limit: Limit`**: the limit that refused the request.
+- **`retry_after: float`**: seconds until a request on the same key can pass.
+  Round it up for an HTTP `Retry-After` header.
+
+Subclass of `RateLimitError`. It survives pickling, so it can cross process
+boundaries.
+
+## `RateLimitError`
+
+Base class of every error raised by ratelimit-io. Invalid arguments raise the
+built-in `TypeError` and `ValueError`, and Redis failures raise redis-py's own
+exceptions unchanged.
+
+## `VERSION` / `__version__`
+
+The installed version, as a string.
