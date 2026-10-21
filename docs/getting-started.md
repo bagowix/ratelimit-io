@@ -8,6 +8,8 @@ pip install ratelimit-io
 
 You need a Redis 5.0+ or Valkey server. Redis 5 predates the RESP3 protocol
 that redis-py 8 speaks by default, so for it pass `protocol=2` to the client.
+Behind Sentinel the sentinels need it too:
+`Sentinel(sentinels, protocol=2, sentinel_kwargs={'protocol': 2})`.
 For local work:
 
 ```bash
@@ -68,22 +70,26 @@ The limiter is also a decorator. It takes a slot before each call and keeps the
 function's signature for type checkers.
 
 ```python
+from ratelimit_io import Key
+
+
 @limiter
 async def export_report() -> bytes: ...
 
 
-@limiter(key=lambda user_id, **_: f'user:{user_id}', limit=Limit(10, minutes=1))
+@limiter(key=Key('user:{user_id}'), limit=Limit(10, minutes=1))
 async def search(user_id: int, query: str) -> list[str]: ...
 ```
 
 Without a key, a decorated function gets a bucket of its own, named after its
 module and qualified name. A string `key` names the bucket directly, and a
-function `key` computes it from each call's arguments. See
-[Keys and buckets](guides/keys.md).
+`Key` template fills it from each call's arguments: `Key('user:{user_id}')`
+gives every user a bucket of their own. See [Keys and buckets](guides/keys.md).
 
 Coroutine functions need an async client and plain functions a sync one. The
-decorator checks this when it is applied, so a mismatch fails at import time
-rather than on the first request.
+decorator checks this when it is applied, as it checks that every field of a
+`Key` names a parameter, so a mismatch fails at import time rather than on the
+first request.
 
 ## Waiting instead of failing
 

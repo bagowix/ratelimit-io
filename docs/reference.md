@@ -51,18 +51,40 @@ Coroutine functions take their slot with `acquire()`, plain functions with
 `limiter(func, *, key=None, limit=None, max_wait=None)` does the same for a
 function defined elsewhere, such as a method of a third-party client.
 
-The bucket key of a call is the decorator's `key` (a string, or a function that
-receives the call's arguments by name, defaults included, and returns one),
-else the limiter's `key`, else the function's `module.qualname`. See
+The bucket key of a call is the decorator's `key`, else the limiter's `key`,
+else the function's `module.qualname`. The decorator's `key` is a string, a
+[`Key`](#key) template, or a key function that receives the arguments it names,
+bound by name with defaults included, and returns the key. A key function that
+takes `**kwargs` receives every argument. See
 [Keys and buckets](guides/keys.md).
 
 Raises `TypeError` when the function's nature does not match the client, for
 a `staticmethod` or `classmethod` object (put `@limiter` below them), a
-generator function, anything not callable, or an option of the wrong type.
-Raises `ValueError` for an empty `key`, a negative `max_wait`, or when no limit
-is given and the limiter has none. A key function that returns an empty string
-raises `ValueError` on the call, and one that returns anything but a string
-raises `TypeError`.
+generator function, anything not callable, a `Key` field or a required key
+function parameter that names no parameter of the function, or an option of
+the wrong type. Raises `ValueError` for an empty `key`, a string `key` that
+reads as a template (pass a `Key`), a negative `max_wait`, or when no limit is
+given and the limiter has none. On the call, a key function that returns an
+empty string and a `Key` field that is `None` or empty raise `ValueError`, and
+a key function that returns anything but a string raises `TypeError`.
+
+## `Key`
+
+```python
+Key(template)
+```
+
+Frozen dataclass: a decorator key that `str.format` fills from the arguments
+of each call, as in `@limiter(key=Key('user:{user_id}'))`. A field starts with
+the name of a parameter of the decorated function and may go on to attributes
+and items: `{request.client.host}`, `{headers[x-api-key]}`. A plain `str` key
+is never formatted. See [`Key` templates](guides/keys.md#key-templates).
+
+Doubled braces stay literal: `Key('{{tag}}:{user_id}')` fills `{tag}:42`.
+
+Raises `TypeError` when `template` is not a string, and `ValueError` when it is
+empty or malformed, or has a positional field such as `{}` or `{0}`, an unknown
+conversion, or a field inside a format spec.
 
 ## `Limit`
 

@@ -1,13 +1,15 @@
 """``@limiter`` and ``@limiter(...)``: keys, limits, clients and wrapping."""
 
+import inspect
 import time
 from collections.abc import AsyncIterator, Callable, Iterator
+from types import SimpleNamespace
 
 import pytest
 from redis.asyncio import Redis as AsyncRedis
 
 from conftest import LONG, MakeLimiter
-from ratelimit_io import Limit, RateLimiter, RateLimitExceededError
+from ratelimit_io import Key, Limit, RateLimiter, RateLimitExceededError
 
 ONE = Limit(1, minutes=1)
 
@@ -293,6 +295,271 @@ def test__decorator__key_function_returns_a_non_string__raises_type_error(
 
     with pytest.raises(TypeError, match=r'the key of .*handler must be a str, got int'):
         handler()
+
+
+def test__decorator__key_function__receives_only_the_parameters_it_names(
+    make_limiter: MakeLimiter,
+) -> None:
+    limiter = make_limiter(limit=ONE)
+
+    @limiter(key=lambda user_id: f'user:{user_id}')
+    def search(user_id: int, query: str) -> str:
+        return f'{user_id}:{query}'
+
+    assert search(42, 'shoes') == '42:shoes'
+
+    with pytest.raises(RateLimitExceededError):
+        limiter.acquire_sync('user:42')
+
+
+@pytest.mark.asyncio
+async def test__decorator__key_function_on_async__receives_only_the_parameters_it_names(
+    make_limiter: MakeLimiter, async_redis_client: AsyncRedis
+) -> None:
+    limiter = make_limiter(async_redis_client, limit=ONE)
+
+    @limiter(key=lambda user_id: f'user:{user_id}')
+    async def search(user_id: int, query: str) -> str:
+        return f'{user_id}:{query}'
+
+    assert await search(42, 'shoes') == '42:shoes'
+
+    with pytest.raises(RateLimitExceededError):
+        await limiter.acquire('user:42')
+
+
+def test__decorator__key_function_parameter_with_a_default__keeps_the_default(
+    make_limiter: MakeLimiter,
+) -> None:
+    limiter = make_limiter(limit=ONE)
+
+    def scoped(user_id: int, scope: str = 'search') -> str:
+        return f'{scope}:{user_id}'
+
+    @limiter(key=scoped)
+    def search(user_id: int) -> None: ...
+
+    search(42)
+
+    with pytest.raises(RateLimitExceededError):
+        limiter.acquire_sync('search:42')
+
+
+def test__decorator__str_format_as_key_function__receives_every_argument(
+    make_limiter: MakeLimiter,
+) -> None:
+    limiter = make_limiter(limit=ONE)
+
+    @limiter(key='user:{user_id}'.format)
+    def search(user_id: int, query: str) -> None: ...
+
+    search(42, 'shoes')
+
+    with pytest.raises(RateLimitExceededError):
+        limiter.acquire_sync('user:42')
+
+
+def test__decorator__key_function_without_a_readable_signature__receives_every_argument(
+    make_limiter: MakeLimiter,
+) -> None:
+    limiter = make_limiter(limit=ONE)
+
+    class Unreadable:
+        @property
+        def __signature__(self) -> inspect.Signature:
+            raise ValueError('no signature')
+
+        def __call__(self, **arguments: object) -> str:
+            return f'user:{arguments["user_id"]}'
+
+    @limiter(key=Unreadable())
+    def search(user_id: int, query: str) -> None: ...
+
+    search(42, 'shoes')
+
+    with pytest.raises(RateLimitExceededError):
+        limiter.acquire_sync('user:42')
+
+
+def test__decorator__key_function_names_no_parameter__raises_type_error(
+    limiter: RateLimiter,
+) -> None:
+    def search(user_id: int) -> None: ...
+
+    with pytest.raises(TypeError, match=r"search has no parameter 'usr_id' for its key"):
+        limiter(search, key=lambda usr_id: f'user:{usr_id}')
+
+
+def test__decorator__key_function_with_kwargs_names_no_parameter__raises_type_error(
+    limiter: RateLimiter,
+) -> None:
+    def search(user_id: int) -> None: ...
+
+    with pytest.raises(TypeError, match=r"search has no parameter 'usr_id' for its key"):
+        limiter(search, key=lambda usr_id, **_: f'user:{usr_id}')
+
+
+def test__decorator__key_template__keys_each_call_by_its_arguments(
+    make_limiter: MakeLimiter,
+) -> None:
+    limiter = make_limiter(limit=ONE)
+
+    @limiter(key=Key('user:{user_id}'))
+    def search(user_id: int, query: str) -> str:
+        return f'{user_id}:{query}'
+
+    assert search(42, 'shoes') == '42:shoes'
+    assert search(7, 'hats') == '7:hats'
+
+    with pytest.raises(RateLimitExceededError):
+        limiter.acquire_sync('user:42')
+
+
+@pytest.mark.asyncio
+async def test__decorator__key_template_on_async__keys_each_call_by_its_arguments(
+    make_limiter: MakeLimiter, async_redis_client: AsyncRedis
+) -> None:
+    limiter = make_limiter(async_redis_client, limit=ONE)
+
+    @limiter(key=Key('user:{user_id}'))
+    async def search(user_id: int, query: str) -> str:
+        return f'{user_id}:{query}'
+
+    assert await search(42, 'shoes') == '42:shoes'
+    assert await search(7, 'hats') == '7:hats'
+
+    with pytest.raises(RateLimitExceededError):
+        await limiter.acquire('user:42')
+
+
+def test__decorator__key_template__binds_arguments_by_name_with_defaults(
+    make_limiter: MakeLimiter,
+) -> None:
+    limiter = make_limiter(limit=ONE)
+
+    @limiter(key=Key('{user_id}:{page}'))
+    def search(user_id: int, page: int = 1) -> None: ...
+
+    search(42)
+
+    with pytest.raises(RateLimitExceededError):
+        search(user_id=42, page=1)
+
+
+def test__decorator__key_template__reads_attributes(make_limiter: MakeLimiter) -> None:
+    limiter = make_limiter(limit=ONE)
+    request = SimpleNamespace(client=SimpleNamespace(host='203.0.113.7'))
+
+    @limiter(key=Key('ip:{request.client.host}'))
+    def handler(request: SimpleNamespace) -> None: ...
+
+    handler(request)
+
+    with pytest.raises(RateLimitExceededError):
+        limiter.acquire_sync('ip:203.0.113.7')
+
+
+def test__decorator__key_template__reads_items(make_limiter: MakeLimiter) -> None:
+    limiter = make_limiter(limit=ONE)
+
+    @limiter(key=Key('api-key:{headers[x-api-key]}'))
+    def handler(headers: dict[str, str]) -> None: ...
+
+    handler({'x-api-key': 'k1'})
+
+    with pytest.raises(RateLimitExceededError):
+        limiter.acquire_sync('api-key:k1')
+
+
+def test__decorator__key_template_on_a_method__reads_self(make_limiter: MakeLimiter) -> None:
+    limiter = make_limiter(limit=ONE)
+
+    class Tenant:
+        name = 'acme'
+
+        @limiter(key=Key('{self.name}:{user_id}'))
+        def search(self, user_id: int) -> None: ...
+
+    Tenant().search(42)
+
+    with pytest.raises(RateLimitExceededError):
+        limiter.acquire_sync('acme:42')
+
+
+def test__decorator__key_template_with_doubled_braces__keeps_them_literal(
+    make_limiter: MakeLimiter,
+) -> None:
+    limiter = make_limiter(limit=ONE)
+
+    @limiter(key=Key('{{tag}}:{user_id}'))
+    def search(user_id: int) -> None: ...
+
+    search(42)
+
+    with pytest.raises(RateLimitExceededError):
+        limiter.acquire_sync('{tag}:42')
+
+
+def test__decorator__key_template_names_no_parameter__raises_type_error(
+    limiter: RateLimiter,
+) -> None:
+    def search(user_id: int) -> None: ...
+
+    with pytest.raises(TypeError, match=r"search has no parameter 'usr_id' for its key"):
+        limiter(search, key=Key('user:{usr_id.name}'))
+
+
+def test__decorator__plain_key_with_a_field__raises_and_names_both_fixes(
+    limiter: RateLimiter,
+) -> None:
+    def search(user_id: int) -> None: ...
+
+    with pytest.raises(
+        ValueError,
+        match=r"Key\('user:\{user_id\}'\).*Key\('user:\{\{user_id\}\}'\)",
+    ):
+        limiter(search, key='user:{user_id}')
+
+
+def test__decorator__plain_key_with_unbalanced_braces__stays_literal(
+    make_limiter: MakeLimiter,
+) -> None:
+    limiter = make_limiter(limit=ONE)
+
+    @limiter(key='user:}')
+    def handler() -> None: ...
+
+    handler()
+
+    with pytest.raises(RateLimitExceededError):
+        limiter.acquire_sync('user:}')
+
+
+def test__decorator__limiter_key_with_braces__is_used_as_it_is(make_limiter: MakeLimiter) -> None:
+    limiter = make_limiter(limit=ONE, key='user:{user_id}')
+
+    @limiter
+    def search(user_id: int) -> None: ...
+
+    search(42)
+
+    with pytest.raises(RateLimitExceededError):
+        limiter.acquire_sync()
+
+
+@pytest.mark.parametrize('user_id', [None, ''])
+def test__decorator__key_template_field_is_none_or_empty__raises_before_taking_a_slot(
+    make_limiter: MakeLimiter, user_id: str | None
+) -> None:
+    limiter = make_limiter(limit=ONE)
+
+    @limiter(key=Key('user:{user_id}'))
+    def search(user_id: str | None) -> None: ...
+
+    with pytest.raises(ValueError, match=r'the key of .*search: \{user_id\} is'):
+        search(user_id)
+
+    limiter.acquire_sync(f'user:{user_id}')
 
 
 def test__decorator__empty_key__raises(make_limiter: MakeLimiter) -> None:

@@ -6,6 +6,33 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **`Key` templates for the decorator.** `@limiter(key=Key('user:{user_id}'))`
+  fills the bucket key from each call's arguments with `str.format`, attributes
+  and items included, as in `Key('search:{request.client.host}')`. A key per
+  argument used to take a lambda that had to swallow every other argument,
+  `key=lambda user_id, **_: f'user:{user_id}'`. The decorator checks that every
+  field names a parameter when it is applied, and a field that is `None` or
+  empty raises `ValueError` on the call: a lambda would count every such call
+  in one `user:None` bucket.
+
+### Changed
+
+- **Key functions receive only the parameters they name.** A key function was
+  called with every argument of the call, so the natural
+  `key=lambda user_id: ...` passed import and failed on the first request with
+  `TypeError: <lambda>() got an unexpected keyword argument`. It now receives
+  `user_id` alone, and a required parameter the decorated function lacks
+  raises `TypeError` when the decorator is applied, with or without
+  `**kwargs`. Key functions that take `**kwargs` receive every argument, as
+  before.
+- **The decorator refuses a string key that reads as a template.**
+  `key='user:{user_id}'` was a literal, one bucket for every call. It now
+  raises `ValueError` when the decorator is applied and offers
+  `Key('user:{user_id}')`. A decorator key that holds braces on purpose keeps
+  its bucket as `Key('user:{{user_id}}')`.
+
 ## [1.0.0] - 2026-10-20
 
 1.0 is a rewrite with a new API; the

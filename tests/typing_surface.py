@@ -12,7 +12,7 @@ nothing.
 
 from typing import assert_type
 
-from ratelimit_io import Limit, RateLimiter
+from ratelimit_io import Key, Limit, RateLimiter
 
 
 def _bare_decorator__keeps_the_signature(limiter: RateLimiter) -> None:
@@ -52,6 +52,14 @@ async def _decorator_with_options__keeps_the_async_signature(limiter: RateLimite
     assert_type(await handler('alice'), int)
 
 
+def _key_template__keeps_the_signature(limiter: RateLimiter) -> None:
+    @limiter(key=Key('user:{user}'))
+    def handler(user: str) -> int:
+        return len(user)
+
+    assert_type(handler('alice'), int)
+
+
 def _decorated_method__binds_self(limiter: RateLimiter) -> None:
     class Users:
         @limiter
@@ -74,6 +82,10 @@ def _wrong_arguments__are_rejected(limiter: RateLimiter) -> None:
     limiter('reports')  # type: ignore[call-overload]
 
     Limit(1, 1)  # type: ignore[call-arg]
+
+    Key(42)  # type: ignore[arg-type]
+
+    limiter.acquire_sync(Key('user:{user}'))  # type: ignore[arg-type]
 
 
 async def _acquire__returns_none(limiter: RateLimiter) -> None:

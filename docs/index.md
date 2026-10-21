@@ -7,12 +7,12 @@ between them.
 ```python
 from redis.asyncio import Redis
 
-from ratelimit_io import Limit, RateLimiter
+from ratelimit_io import Key, Limit, RateLimiter
 
 limiter = RateLimiter(Redis(), limit=Limit(100, minutes=1))
 
 
-@limiter(key=lambda user_id, **_: f'user:{user_id}')
+@limiter(key=Key('user:{user_id}'))
 async def search(user_id: int, query: str) -> list[str]: ...
 ```
 

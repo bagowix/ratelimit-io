@@ -49,16 +49,22 @@ socket for example. Key on the address your proxy forwards then: a placeholder
 such as `'unknown'` would put every such client in one bucket.
 
 The decorator works on routes as well. It keeps the endpoint's signature, so
-FastAPI still sees the parameters, and a key function receives them by name:
+FastAPI still sees the parameters, and a `Key` template fills the bucket key
+from them:
 
 ```python
+from ratelimit_io import Key
+
+
 @app.get('/search')
-@limiter(key=lambda request, **_: f'search:{request.client.host}')
+@limiter(key=Key('search:{request.client.host}'))
 async def search(request: Request, q: str) -> list[str]:
     return []
 ```
 
 Put `@app.get` above the limiter, so the route registers the limited function.
+When `request.client` is `None`, the template raises `AttributeError` and the
+request fails with a `500`; no client lands in a shared bucket.
 
 ## Litestar
 
@@ -106,8 +112,9 @@ app = Litestar(
 
 ## Django
 
-Django views are sync, so the limiter takes a `redis.Redis` client and calls
-`acquire_sync()`. A middleware covers every view:
+The middleware below is synchronous, so the limiter takes a `redis.Redis`
+client and calls `acquire_sync()`. Django runs a sync middleware under WSGI and
+ASGI alike, in front of sync and async views. It covers every view:
 
 ```python
 import math
@@ -140,13 +147,16 @@ Behind a proxy, key on the client address your proxy forwards rather than on
 
 ## Flask
 
-An error handler plus the decorator on a view. Flask passes URL parameters as
-keyword arguments, so the key function swallows them with `**_`:
+An error handler plus the decorator on a view. A `Key` template reads the
+view's parameters, and Flask's `request` is a global, so the view keys on it
+with a function that takes no parameters. `request.remote_addr` is `None` when
+the server sees no peer address, and the function refuses such a request:
+`items:None` would be one bucket for all of them.
 
 ```python
 import math
 
-from flask import Flask, request
+from flask import Flask, abort, request
 from redis import Redis
 
 from ratelimit_io import Limit, RateLimiter, RateLimitExceededError
@@ -160,8 +170,15 @@ def too_many_requests(error: RateLimitExceededError):
     return 'Too many requests', 429, {'Retry-After': str(math.ceil(error.retry_after))}
 
 
+def items_key() -> str:
+    if request.remote_addr is None:
+        abort(500, 'no client address to rate limit by')
+
+    return f'items:{request.remote_addr}'
+
+
 @app.get('/items/<int:item_id>')
-@limiter(key=lambda **_: f'items:{request.remote_addr}')
+@limiter(key=items_key)
 def get_item(item_id: int) -> str:
     return str(item_id)
 ```
@@ -169,7 +186,8 @@ def get_item(item_id: int) -> str:
 ## Outgoing calls with httpx
 
 For a client of someone else's API, a limiter-wide key and a wait budget keep
-every call under the provider's quota:
+every call under the provider's quota. GitHub allows 5000 requests an hour to
+authenticated clients, so `client` sends a token:
 
 ```python
 import httpx

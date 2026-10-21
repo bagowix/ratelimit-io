@@ -23,6 +23,8 @@ pip install ratelimit-io
 
 You need a Redis 5.0+ or Valkey server. Redis 5 predates the RESP3 protocol
 that redis-py 8 speaks by default, so for it pass `protocol=2` to the client.
+Behind Sentinel the sentinels need it too:
+`Sentinel(sentinels, protocol=2, sentinel_kwargs={'protocol': 2})`.
 For local work:
 
 ```bash
@@ -83,22 +85,26 @@ The limiter is also a decorator. It takes a slot before each call and keeps the
 function's signature for type checkers.
 
 ```python
+from ratelimit_io import Key
+
+
 @limiter
 async def export_report() -> bytes: ...
 
 
-@limiter(key=lambda user_id, **_: f'user:{user_id}', limit=Limit(10, minutes=1))
+@limiter(key=Key('user:{user_id}'), limit=Limit(10, minutes=1))
 async def search(user_id: int, query: str) -> list[str]: ...
 ```
 
 Without a key, a decorated function gets a bucket of its own, named after its
 module and qualified name. A string `key` names the bucket directly, and a
-function `key` computes it from each call's arguments. See
-[Keys and buckets](guides/keys.md).
+`Key` template fills it from each call's arguments: `Key('user:{user_id}')`
+gives every user a bucket of their own. See [Keys and buckets](guides/keys.md).
 
 Coroutine functions need an async client and plain functions a sync one. The
-decorator checks this when it is applied, so a mismatch fails at import time
-rather than on the first request.
+decorator checks this when it is applied, as it checks that every field of a
+`Key` names a parameter, so a mismatch fails at import time rather than on the
+first request.
 
 ## Waiting instead of failing
 
@@ -272,12 +278,14 @@ and the limiter never invents one.
 
 The decorator finds the key of each call in this order:
 
-1. the decorator's `key`: a string, or a function of the call's arguments;
+1. the decorator's `key`: a string, a `Key` template, or a key function;
 2. the limiter's `key`;
 3. the function's `module.qualname`, which gives every decorated function a
    bucket of its own.
 
 ```python
+from ratelimit_io import Key
+
 limiter = RateLimiter(client, limit=Limit(10, seconds=1))
 
 
@@ -285,31 +293,72 @@ limiter = RateLimiter(client, limit=Limit(10, seconds=1))
 async def checkout(order_id: int) -> None: ...
 
 
-@limiter(key=lambda user_id, **_: f'user:{user_id}')  # one bucket per user
+@limiter(key=Key('user:{user_id}'))  # one bucket per user
 async def search(user_id: int, query: str) -> list[str]: ...
 ```
-
-A key function receives the call's arguments by name, defaults included,
-however the caller passed them: `search(42, 'shoes')` and
-`search(user_id=42, query='shoes')` both reach it as `user_id=42,
-query='shoes'`. Name the parameters you need and swallow the rest with `**_`.
-On a method, `self` arrives too; `*args` and `**kwargs` parameters arrive under
-their own names, as a tuple and a dict.
-
-The arguments are bound to the signature of the function under `@limiter`,
-seen through any `functools.wraps` wrapper. Put `@limiter` directly above the
-`def`, below decorators that add or remove parameters, such as `mock.patch`.
-
-It must return a non-empty string. An empty string is a bug in the function, so
-it raises `ValueError`, and anything other than a string raises `TypeError`;
-the limiter never falls back to a shared bucket.
-
-Under strict pyright or pyrefly, prefer a typed function to a lambda: the
-parameters of a lambda passed as `key` have no inferred types.
 
 Functions made inside another function share a `module.qualname`, such as
 `make_handler.<locals>.handler`, so every function one factory makes shares a
 bucket. Give them a key when they should count apart.
+
+A `Key` template and a key function both see the call's arguments bound to the
+signature of the function under `@limiter`, seen through any `functools.wraps`
+wrapper. Put `@limiter` directly above the `def`, below decorators that add or
+remove parameters, such as `mock.patch`.
+
+### `Key` templates
+
+`Key` fills a `str.format` template from the arguments of each call. A field
+starts with the name of a parameter and may go on to attributes and items:
+`Key('search:{request.client.host}')`, `Key('{headers[x-api-key]}')`.
+
+The arguments are bound by name, defaults included, however the caller passed
+them: `search(42, 'shoes')` and `search(user_id=42, query='shoes')` both fill
+`user:42`. On a method, `self` is a parameter too, as in
+`Key('account:{self.account_id}')`. `*args` and `**kwargs` parameters are
+filled under their own names, as a tuple and a dict:
+`Key('user:{kwargs[user_id]}')`.
+
+The decorator checks the template when it is applied. A field that names no
+parameter of the function raises `TypeError` at import time. A positional field
+such as `{}` or `{0}`, an unknown conversion, and a field inside a format spec
+such as `{user_id:{width}}` raise `ValueError` when the `Key` is created.
+Doubled braces stay literal: `Key('{{tag}}:{user_id}')` fills `{tag}:42`.
+
+A field that is `None` or an empty string raises `ValueError` on the call:
+`user:None` would put every call without a user in one bucket. The limiter
+never falls back to a shared bucket.
+
+A plain string is never formatted. The decorator refuses a string `key` that
+reads as a template, such as `key='user:{user_id}'`: as a literal it would be
+one bucket for every call. The `ValueError` offers `Key('user:{user_id}')` to
+fill it from the arguments, and `Key('user:{{user_id}}')` to keep the braces
+and the bucket the literal key had. The limiter's own `key` and the key of
+`acquire()` are used as they are.
+
+### Key functions
+
+When the key needs logic that a template cannot express, pass a function. It
+receives the parameters it names, bound the same way, and returns the key:
+
+```python
+def account_key(user: User) -> str:
+    if user.organization_id is not None:
+        return f'org:{user.organization_id}'
+
+    return f'user:{user.id}'
+
+
+@limiter(key=account_key)  # members of an organization share its bucket
+async def search(user: User, query: str) -> list[str]: ...
+```
+
+A key function that takes `**kwargs` receives every argument. A parameter the
+decorated function lacks must have a default, or the decorator raises
+`TypeError` at import time.
+
+It must return a non-empty string. An empty string is a bug in the function, so
+it raises `ValueError`, and anything other than a string raises `TypeError`.
 
 ## Several functions, one bucket
 
@@ -505,16 +554,22 @@ socket for example. Key on the address your proxy forwards then: a placeholder
 such as `'unknown'` would put every such client in one bucket.
 
 The decorator works on routes as well. It keeps the endpoint's signature, so
-FastAPI still sees the parameters, and a key function receives them by name:
+FastAPI still sees the parameters, and a `Key` template fills the bucket key
+from them:
 
 ```python
+from ratelimit_io import Key
+
+
 @app.get('/search')
-@limiter(key=lambda request, **_: f'search:{request.client.host}')
+@limiter(key=Key('search:{request.client.host}'))
 async def search(request: Request, q: str) -> list[str]:
     return []
 ```
 
 Put `@app.get` above the limiter, so the route registers the limited function.
+When `request.client` is `None`, the template raises `AttributeError` and the
+request fails with a `500`; no client lands in a shared bucket.
 
 ## Litestar
 
@@ -562,8 +617,9 @@ app = Litestar(
 
 ## Django
 
-Django views are sync, so the limiter takes a `redis.Redis` client and calls
-`acquire_sync()`. A middleware covers every view:
+The middleware below is synchronous, so the limiter takes a `redis.Redis`
+client and calls `acquire_sync()`. Django runs a sync middleware under WSGI and
+ASGI alike, in front of sync and async views. It covers every view:
 
 ```python
 import math
@@ -596,13 +652,16 @@ Behind a proxy, key on the client address your proxy forwards rather than on
 
 ## Flask
 
-An error handler plus the decorator on a view. Flask passes URL parameters as
-keyword arguments, so the key function swallows them with `**_`:
+An error handler plus the decorator on a view. A `Key` template reads the
+view's parameters, and Flask's `request` is a global, so the view keys on it
+with a function that takes no parameters. `request.remote_addr` is `None` when
+the server sees no peer address, and the function refuses such a request:
+`items:None` would be one bucket for all of them.
 
 ```python
 import math
 
-from flask import Flask, request
+from flask import Flask, abort, request
 from redis import Redis
 
 from ratelimit_io import Limit, RateLimiter, RateLimitExceededError
@@ -616,8 +675,15 @@ def too_many_requests(error: RateLimitExceededError):
     return 'Too many requests', 429, {'Retry-After': str(math.ceil(error.retry_after))}
 
 
+def items_key() -> str:
+    if request.remote_addr is None:
+        abort(500, 'no client address to rate limit by')
+
+    return f'items:{request.remote_addr}'
+
+
 @app.get('/items/<int:item_id>')
-@limiter(key=lambda **_: f'items:{request.remote_addr}')
+@limiter(key=items_key)
 def get_item(item_id: int) -> str:
     return str(item_id)
 ```
@@ -625,7 +691,8 @@ def get_item(item_id: int) -> str:
 ## Outgoing calls with httpx
 
 For a client of someone else's API, a limiter-wide key and a wait budget keep
-every call under the provider's quota:
+every call under the provider's quota. GitHub allows 5000 requests an hour to
+authenticated clients, so `client` sends a token:
 
 ```python
 import httpx
@@ -688,7 +755,7 @@ places where 0.x was wrong; those changes are listed under
 | `wait(..., max_wait_time=)` | `acquire_sync(..., max_wait=)` |
 | `backoff_start=`, `backoff_max=` | removed: a waiting request reserves its slot and sleeps until it |
 | decorator `unique_key='x'` | decorator `key='x'` |
-| `kwargs['ip']` picked up as the key | `key=lambda ip, **_: ip` |
+| `kwargs['ip']` picked up as the key | `key=Key('{ip}')` |
 
 ## Behaviour
 
@@ -784,18 +851,40 @@ Coroutine functions take their slot with `acquire()`, plain functions with
 `limiter(func, *, key=None, limit=None, max_wait=None)` does the same for a
 function defined elsewhere, such as a method of a third-party client.
 
-The bucket key of a call is the decorator's `key` (a string, or a function that
-receives the call's arguments by name, defaults included, and returns one),
-else the limiter's `key`, else the function's `module.qualname`. See
+The bucket key of a call is the decorator's `key`, else the limiter's `key`,
+else the function's `module.qualname`. The decorator's `key` is a string, a
+[`Key`](#key) template, or a key function that receives the arguments it names,
+bound by name with defaults included, and returns the key. A key function that
+takes `**kwargs` receives every argument. See
 [Keys and buckets](guides/keys.md).
 
 Raises `TypeError` when the function's nature does not match the client, for
 a `staticmethod` or `classmethod` object (put `@limiter` below them), a
-generator function, anything not callable, or an option of the wrong type.
-Raises `ValueError` for an empty `key`, a negative `max_wait`, or when no limit
-is given and the limiter has none. A key function that returns an empty string
-raises `ValueError` on the call, and one that returns anything but a string
-raises `TypeError`.
+generator function, anything not callable, a `Key` field or a required key
+function parameter that names no parameter of the function, or an option of
+the wrong type. Raises `ValueError` for an empty `key`, a string `key` that
+reads as a template (pass a `Key`), a negative `max_wait`, or when no limit is
+given and the limiter has none. On the call, a key function that returns an
+empty string and a `Key` field that is `None` or empty raise `ValueError`, and
+a key function that returns anything but a string raises `TypeError`.
+
+## `Key`
+
+```python
+Key(template)
+```
+
+Frozen dataclass: a decorator key that `str.format` fills from the arguments
+of each call, as in `@limiter(key=Key('user:{user_id}'))`. A field starts with
+the name of a parameter of the decorated function and may go on to attributes
+and items: `{request.client.host}`, `{headers[x-api-key]}`. A plain `str` key
+is never formatted. See [`Key` templates](guides/keys.md#key-templates).
+
+Doubled braces stay literal: `Key('{{tag}}:{user_id}')` fills `{tag}:42`.
+
+Raises `TypeError` when `template` is not a string, and `ValueError` when it is
+empty or malformed, or has a positional field such as `{}` or `{0}`, an unknown
+conversion, or a field inside a format spec.
 
 ## `Limit`
 
