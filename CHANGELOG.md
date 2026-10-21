@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-10-21
+
 ### Added
 
 - **`Key` templates for the decorator.** `@limiter(key=Key('user:{user_id}'))`
@@ -256,7 +258,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Initial release.
 
-[Unreleased]: https://github.com/bagowix/ratelimit-io/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/bagowix/ratelimit-io/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/bagowix/ratelimit-io/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/bagowix/ratelimit-io/compare/0.6.5...v1.0.0
 [0.6.5]: https://github.com/bagowix/ratelimit-io/compare/0.6.4...0.6.5
 [0.6.4]: https://github.com/bagowix/ratelimit-io/compare/0.6.3...0.6.4
