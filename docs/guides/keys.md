@@ -29,12 +29,14 @@ and the limiter never invents one.
 
 The decorator finds the key of each call in this order:
 
-1. the decorator's `key`: a string, or a function of the call's arguments;
+1. the decorator's `key`: a string, a `Key` template, or a key function;
 2. the limiter's `key`;
 3. the function's `module.qualname`, which gives every decorated function a
    bucket of its own.
 
 ```python
+from ratelimit_io import Key
+
 limiter = RateLimiter(client, limit=Limit(10, seconds=1))
 
 
@@ -42,31 +44,72 @@ limiter = RateLimiter(client, limit=Limit(10, seconds=1))
 async def checkout(order_id: int) -> None: ...
 
 
-@limiter(key=lambda user_id, **_: f'user:{user_id}')  # one bucket per user
+@limiter(key=Key('user:{user_id}'))  # one bucket per user
 async def search(user_id: int, query: str) -> list[str]: ...
 ```
-
-A key function receives the call's arguments by name, defaults included,
-however the caller passed them: `search(42, 'shoes')` and
-`search(user_id=42, query='shoes')` both reach it as `user_id=42,
-query='shoes'`. Name the parameters you need and swallow the rest with `**_`.
-On a method, `self` arrives too; `*args` and `**kwargs` parameters arrive under
-their own names, as a tuple and a dict.
-
-The arguments are bound to the signature of the function under `@limiter`,
-seen through any `functools.wraps` wrapper. Put `@limiter` directly above the
-`def`, below decorators that add or remove parameters, such as `mock.patch`.
-
-It must return a non-empty string. An empty string is a bug in the function, so
-it raises `ValueError`, and anything other than a string raises `TypeError`;
-the limiter never falls back to a shared bucket.
-
-Under strict pyright or pyrefly, prefer a typed function to a lambda: the
-parameters of a lambda passed as `key` have no inferred types.
 
 Functions made inside another function share a `module.qualname`, such as
 `make_handler.<locals>.handler`, so every function one factory makes shares a
 bucket. Give them a key when they should count apart.
+
+A `Key` template and a key function both see the call's arguments bound to the
+signature of the function under `@limiter`, seen through any `functools.wraps`
+wrapper. Put `@limiter` directly above the `def`, below decorators that add or
+remove parameters, such as `mock.patch`.
+
+### `Key` templates
+
+`Key` fills a `str.format` template from the arguments of each call. A field
+starts with the name of a parameter and may go on to attributes and items:
+`Key('search:{request.client.host}')`, `Key('{headers[x-api-key]}')`.
+
+The arguments are bound by name, defaults included, however the caller passed
+them: `search(42, 'shoes')` and `search(user_id=42, query='shoes')` both fill
+`user:42`. On a method, `self` is a parameter too, as in
+`Key('account:{self.account_id}')`. `*args` and `**kwargs` parameters are
+filled under their own names, as a tuple and a dict:
+`Key('user:{kwargs[user_id]}')`.
+
+The decorator checks the template when it is applied. A field that names no
+parameter of the function raises `TypeError` at import time. A positional field
+such as `{}` or `{0}`, an unknown conversion, and a field inside a format spec
+such as `{user_id:{width}}` raise `ValueError` when the `Key` is created.
+Doubled braces stay literal: `Key('{{tag}}:{user_id}')` fills `{tag}:42`.
+
+A field that is `None` or an empty string raises `ValueError` on the call:
+`user:None` would put every call without a user in one bucket. The limiter
+never falls back to a shared bucket.
+
+A plain string is never formatted. The decorator refuses a string `key` that
+reads as a template, such as `key='user:{user_id}'`: as a literal it would be
+one bucket for every call. The `ValueError` offers `Key('user:{user_id}')` to
+fill it from the arguments, and `Key('user:{{user_id}}')` to keep the braces
+and the bucket the literal key had. The limiter's own `key` and the key of
+`acquire()` are used as they are.
+
+### Key functions
+
+When the key needs logic that a template cannot express, pass a function. It
+receives the parameters it names, bound the same way, and returns the key:
+
+```python
+def account_key(user: User) -> str:
+    if user.organization_id is not None:
+        return f'org:{user.organization_id}'
+
+    return f'user:{user.id}'
+
+
+@limiter(key=account_key)  # members of an organization share its bucket
+async def search(user: User, query: str) -> list[str]: ...
+```
+
+A key function that takes `**kwargs` receives every argument. A parameter the
+decorated function lacks must have a default, or the decorator raises
+`TypeError` at import time.
+
+It must return a non-empty string. An empty string is a bug in the function, so
+it raises `ValueError`, and anything other than a string raises `TypeError`.
 
 ## Several functions, one bucket
 

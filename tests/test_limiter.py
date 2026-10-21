@@ -13,7 +13,7 @@ from redis.asyncio import Redis as AsyncRedis
 from redis.backoff import NoBackoff
 from redis.retry import Retry
 
-from conftest import LONG, MakeLimiter
+from conftest import LONG, MakeLimiter, bucket_of
 from ratelimit_io import Algorithm, Limit, RateLimiter, RateLimitExceededError
 
 SHORT = Limit(1, seconds=0.2)
@@ -48,6 +48,14 @@ async def test__acquire__over_limit__raises_with_retry_after(
 
     assert caught.value.limit == LONG
     assert 0 < caught.value.retry_after <= 60
+
+
+def test__acquire_sync__key_with_braces__is_used_as_it_is(
+    limiter: RateLimiter, redis_client: Redis
+) -> None:
+    limiter.acquire_sync('user:{user_id}')
+
+    assert redis_client.exists(bucket_of(limiter, 'user:{user_id}', LONG))
 
 
 def test__acquire_sync__max_wait__sleeps_until_its_slot_and_takes_it(

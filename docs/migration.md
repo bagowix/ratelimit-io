@@ -30,7 +30,7 @@ places where 0.x was wrong; those changes are listed under
 | `wait(..., max_wait_time=)` | `acquire_sync(..., max_wait=)` |
 | `backoff_start=`, `backoff_max=` | removed: a waiting request reserves its slot and sleeps until it |
 | decorator `unique_key='x'` | decorator `key='x'` |
-| `kwargs['ip']` picked up as the key | `key=lambda ip, **_: ip` |
+| `kwargs['ip']` picked up as the key | `key=Key('{ip}')` |
 
 ## Behaviour
 

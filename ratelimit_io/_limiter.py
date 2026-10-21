@@ -7,7 +7,7 @@ import inspect
 import numbers
 import time
 import uuid
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from typing import Any, ParamSpec, TypeAlias, TypeVar, cast, overload
 
 from redis import Redis
@@ -16,6 +16,7 @@ from redis.exceptions import NoScriptError
 
 from ratelimit_io._algorithm import Algorithm
 from ratelimit_io._errors import RateLimitExceededError
+from ratelimit_io._key import Key, check_plain_key, template_key
 from ratelimit_io._limit import Limit
 from ratelimit_io._scripts import SCRIPTS
 
@@ -26,6 +27,9 @@ R = TypeVar('R')
 
 # KEYS[1] and ARGV[1..4] of every script; see ratelimit_io._scripts.
 _ScriptArgs: TypeAlias = tuple[str, int, int, float, str]
+
+# What the decorator accepts as the key of each call.
+_DecoratorKey: TypeAlias = str | Key | Callable[..., str]
 
 # @limiter above one of these would turn the descriptor into a plain function;
 # they belong above @limiter.
@@ -181,7 +185,7 @@ class RateLimiter:
         func: Callable[P, R],
         /,
         *,
-        key: str | Callable[..., str] | None = None,
+        key: _DecoratorKey | None = None,
         limit: Limit | None = None,
         max_wait: float | None = None,
     ) -> Callable[P, R]: ...
@@ -192,7 +196,7 @@ class RateLimiter:
         func: None = None,
         /,
         *,
-        key: str | Callable[..., str] | None = None,
+        key: _DecoratorKey | None = None,
         limit: Limit | None = None,
         max_wait: float | None = None,
     ) -> Callable[[Callable[P, R]], Callable[P, R]]: ...
@@ -202,7 +206,7 @@ class RateLimiter:
         func: Callable[P, R] | None = None,
         /,
         *,
-        key: str | Callable[..., str] | None = None,
+        key: _DecoratorKey | None = None,
         limit: Limit | None = None,
         max_wait: float | None = None,
     ) -> Callable[P, R] | Callable[[Callable[P, R]], Callable[P, R]]:
@@ -213,15 +217,15 @@ class RateLimiter:
         functions take their slot with ``acquire()``, plain functions with
         ``acquire_sync()``, so the client must match the function.
 
-        The bucket key of a call is, in order of precedence: ``key`` (a string,
-        or a function that receives the call's arguments by name and returns
-        one), the limiter's ``key``, or the function's ``module.qualname``,
-        which gives the function a bucket of its own.
+        The bucket key of a call is, in order of precedence: ``key``, the
+        limiter's ``key``, or the function's ``module.qualname``, which gives
+        the function a bucket of its own. ``key`` is a string, a ``Key``
+        template filled from the call's arguments, or a function that receives
+        the arguments it names and returns the key.
 
         Args:
             func: The function to rate limit; omitted when options come first.
-            key: The bucket key, or a function that computes it from the call's
-                arguments.
+            key: The bucket key, a ``Key`` template, or a key function.
             limit: The limit. Defaults to the limiter's ``limit``.
             max_wait: Overrides the limiter's ``max_wait`` for these calls.
 
@@ -231,12 +235,14 @@ class RateLimiter:
         Raises:
             TypeError: If the target is not a plain or coroutine function
                 (staticmethod, classmethod and generator functions are
-                refused), its nature does not match the client, or an option
-                has the wrong type.
-            ValueError: If ``key`` is empty, ``max_wait`` is negative, or no
-                limit is given and the limiter has none.
+                refused), its nature does not match the client, ``key`` asks
+                for a parameter the function does not have, or an option has
+                the wrong type.
+            ValueError: If ``key`` is empty or a string that reads as a ``Key``
+                template, ``max_wait`` is negative, or no limit is given and the
+                limiter has none.
         """
-        if key is not None and not callable(key):
+        if key is not None and not isinstance(key, Key) and not callable(key):
             _check_key(key, 'key')
 
         if max_wait is not None:
@@ -253,7 +259,7 @@ class RateLimiter:
         self,
         func: Callable[P, R],
         *,
-        key: str | Callable[..., str] | None,
+        key: _DecoratorKey | None,
         limit: Limit,
         max_wait: float | None,
     ) -> Callable[P, R]:
@@ -289,14 +295,13 @@ class RateLimiter:
 
         return sync_wrapper
 
-    def _key_of(
-        self, func: Callable[..., Any], key: str | Callable[..., str] | None
-    ) -> Callable[..., str]:
+    def _key_of(self, func: Callable[..., Any], key: _DecoratorKey | None) -> Callable[..., str]:
         """Return the function that names the bucket of each call of ``func``."""
-        if callable(key):
-            return _key_function(func, key)
+        if isinstance(key, Key) or callable(key):
+            return _computed_key(func, key)
 
         if key is not None:
+            check_plain_key(key, _name_of(func))
             static = key
         elif self._key is not None:
             static = self._key
@@ -430,15 +435,49 @@ def _default_key(func: object) -> str:
     return f'{getattr(func, "__module__", None)}.{qualname}'
 
 
-def _key_function(func: Callable[..., Any], key_func: Callable[..., str]) -> Callable[..., str]:
-    """Call ``key_func`` with the arguments of each call bound by name, defaults included."""
+def _computed_key(func: Callable[..., Any], key: Key | Callable[..., str]) -> Callable[..., str]:
+    """Compute the key of each call from its arguments, bound by name, defaults included."""
     signature = inspect.signature(func)
     name = _name_of(func)
+    compute = (
+        template_key(key, signature, name)
+        if isinstance(key, Key)
+        else _function_key(key, signature, name)
+    )
 
     def computed(*args: object, **kwargs: object) -> str:
         bound = signature.bind(*args, **kwargs)
         bound.apply_defaults()
 
-        return _check_key(key_func(**bound.arguments), f'the key of {name}')
+        return _check_key(compute(bound.arguments), f'the key of {name}')
 
     return computed
+
+
+def _function_key(
+    key_func: Callable[..., str], signature: inspect.Signature, name: str
+) -> Callable[[Mapping[str, object]], str]:
+    """Call ``key_func`` with the arguments it names, or with all when it takes ``**kwargs``."""
+    # Some callables, such as str.format before Python 3.13, have no readable
+    # signature. They receive every argument, as a key function with **kwargs does.
+    try:
+        parameters = inspect.signature(key_func).parameters.values()
+    except ValueError:
+        return lambda arguments: key_func(**arguments)
+
+    by_name = [
+        parameter
+        for parameter in parameters
+        if parameter.kind in {parameter.POSITIONAL_OR_KEYWORD, parameter.KEYWORD_ONLY}
+    ]
+
+    for parameter in by_name:
+        if parameter.name not in signature.parameters and parameter.default is parameter.empty:
+            raise TypeError(f'{name} has no parameter {parameter.name!r} for its key function')
+
+    if any(parameter.kind is parameter.VAR_KEYWORD for parameter in parameters):
+        return lambda arguments: key_func(**arguments)
+
+    names = tuple(parameter.name for parameter in by_name if parameter.name in signature.parameters)
+
+    return lambda arguments: key_func(**{wanted: arguments[wanted] for wanted in names})

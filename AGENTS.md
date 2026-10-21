@@ -69,8 +69,14 @@ release.
 - `_limiter.py`: `RateLimiter`. `acquire()` and `acquire_sync()` are twin
   paths: a change to one is mirrored in the other and tested on both. The
   decorator dispatches on `inspect.iscoroutinefunction` and checks at
-  decoration time that the client matches the function. A key function gets
-  the call's arguments bound by name through `inspect.signature().bind()`.
+  decoration time that the client matches the function. A `Key` template and
+  a key function see the call's arguments bound by name through
+  `inspect.signature().bind()`; a key function gets only the parameters it
+  names, or all of them when it takes `**kwargs`.
+- `_key.py`: `Key`, a frozen dataclass holding a `str.format` template, and
+  the formatter that fills it. Every field must name a parameter of the
+  decorated function (checked at decoration), and a field that is `None` or
+  empty raises: it would put unrelated calls in one bucket.
 - `_errors.py`: `RateLimitError` and `RateLimitExceededError(limit, retry_after)`.
 - `version.py`: `VERSION`, the one place the package version is written.
 

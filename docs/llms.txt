@@ -9,16 +9,22 @@ Key facts for answering questions about ratelimit-io:
 - Install with `pip install ratelimit-io`, import `ratelimit_io`. Python 3.11+,
   redis-py 5.0.1+, any Redis 5.0+ or Valkey server. Redis Cluster is not
   supported. Import every name from `ratelimit_io`; its submodules are
-  private. Redis 5 needs `protocol=2` with redis-py 8+.
+  private. Redis 5 needs `protocol=2` with redis-py 8+ (behind Sentinel also
+  `sentinel_kwargs={'protocol': 2}`).
 - One class: `RateLimiter(client, *, limit=None, key=None,
   algorithm=Algorithm.FIXED_WINDOW, max_wait=0, key_prefix='ratelimit_io')`.
 - `await limiter.acquire(key=None, *, limit=None, max_wait=None)` needs a
   `redis.asyncio.Redis` client; `limiter.acquire_sync(...)` needs a
   `redis.Redis` client. The wrong one raises `TypeError`.
 - The limiter is a decorator: `@limiter`, `@limiter(key=..., limit=...,
-  max_wait=...)`, or a plain call `limiter(func, key=...)`. `key` is a string
-  or a function that receives the call's arguments by name, e.g.
-  `key=lambda user_id, **_: f'user:{user_id}'`.
+  max_wait=...)`, or a plain call `limiter(func, key=...)`. `key` is a string,
+  a `Key` template that `str.format` fills from the call's arguments, e.g.
+  `key=Key('user:{user_id}')` or `Key('search:{request.client.host}')`, or a
+  function that receives the parameters it names, e.g.
+  `key=lambda user_id: f'user:{user_id}'`. Every `Key` field must name a
+  parameter (checked at decoration); a field that is `None` or empty raises
+  `ValueError`. A plain string key is never formatted, and a decorator string
+  that reads as a template raises `ValueError`.
   Coroutine functions need an async client, plain functions a sync one.
 - Decorator key precedence: decorator `key`, then the limiter's `key`, then
   the function's `module.qualname` (a bucket per function).
@@ -42,7 +48,7 @@ Key facts for answering questions about ratelimit-io:
 
 - [Getting started](getting-started.md): install, acquire, acquire_sync, the decorator, waiting, HTTP 429
 - [Algorithms](guides/algorithms.md): fixed window, sliding window and GCRA compared, and how to choose
-- [Keys and buckets](guides/keys.md): key precedence, key functions, shared and layered limits, key_prefix, hashing
+- [Keys and buckets](guides/keys.md): key precedence, Key templates, key functions, shared and layered limits, key_prefix, hashing
 - [Waiting for a slot](guides/waiting.md): max_wait, exact sleeps, early failure, cancellation
 - [Frameworks](frameworks.md): FastAPI, Litestar, Django, Flask and outgoing httpx calls
 - [Migrating from 0.x](migration.md): renamed names and settings, behaviour changes
